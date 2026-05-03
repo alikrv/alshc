@@ -1,0 +1,16 @@
+[package]
+name = "alshc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# inkwell will be added in Phase 2 (LLVM codegen)
+# inkwell = { version = "0.9", features = [] }
+
+[lib]
+name = "alshc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "alshc"
+path = "src/main.rs"

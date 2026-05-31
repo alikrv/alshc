@@ -1,0 +1,5 @@
+@justrunit
+FN test_fn() {
+  let x = 10
+  std::println($x)
+}

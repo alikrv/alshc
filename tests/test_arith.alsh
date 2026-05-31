@@ -1,0 +1,13 @@
+@justrunit
+
+# test_arith.alsh
+let x = 10
+let y = 3
+let add = ($x + $y)
+let sub = ($x - $y)
+let mul = ($x * $y)
+let div = ($x / $y)
+std::println($add)
+std::println($sub)
+std::println($mul)
+std::println($div)

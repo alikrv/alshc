@@ -1,0 +1,8 @@
+@main
+function test_loop() {
+    let i = 0
+    while ($i < 3) {
+        std::println("loop")
+        $i = ($i + 1)
+    }
+}

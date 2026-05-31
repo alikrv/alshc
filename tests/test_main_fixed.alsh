@@ -1,0 +1,5 @@
+@main
+function my_entry() {
+    let x = 99
+    std::println($x)
+}

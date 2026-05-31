@@ -1,0 +1,4 @@
+@main
+function test() {
+    std::println("hello")
+}

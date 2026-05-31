@@ -1,0 +1,5 @@
+@main
+function thisisthemainfunction() {
+	let x = 42
+	std::println($x)
+}

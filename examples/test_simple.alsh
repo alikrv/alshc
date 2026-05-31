@@ -1,0 +1,6 @@
+#!/usr/bin/env alsh
+
+@main
+function main() void {
+    println("Hello from ALSH")
+}

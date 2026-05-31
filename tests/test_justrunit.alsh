@@ -1,0 +1,3 @@
+@justrunit
+let x = 10
+std::println($x)

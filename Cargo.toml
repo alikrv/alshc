@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# inkwell will be added in Phase 2 (LLVM codegen)
-# inkwell = { version = "0.9", features = [] }
+inkwell = { version = "0.9", features = ["llvm17-0"] }
+libc = "0.2"
 
 [lib]
 name = "alshc"

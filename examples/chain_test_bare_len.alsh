@@ -4,7 +4,7 @@
 @main
 
 function main() int {
-    echo "=== Test bare len() in chain ==="
+    println("=== Test bare len() in chain ===")
     
     # Using bare len() instead of std::len()
     let len_result = chain {

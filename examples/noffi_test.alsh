@@ -5,7 +5,7 @@
 
 @noffi
 
-function test_noffi() void {
+function test_noffi() noret {
     c::puts("this should not execute")
     c::printf("this should also not execute\n")
     println("noffi test passed")

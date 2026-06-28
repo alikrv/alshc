@@ -1,23 +1,23 @@
 #!/usr/local/bin/alsh
 
-
+@stdlib
 @main
-function an_example() void{
+function an_example() noret{
 
     let myvar = "Hello, ALSH!"
-    echo $myvar
+    println($myvar)
 
     loop count 10 {
-        echo "Loop iteration"
+        println("Loop iteration")
     }
 
-    std::println("Hello, world!")
+    println("Hello, world!")
     c::puts("Hello from C!")
 
 
     let message = "hey"
     c::puts($message)
-    std::println($message)
-    echo $message
-    
+    println($message)
+    println($message)
+
 }

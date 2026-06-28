@@ -1,2 +1,7 @@
 target
 .vscode
+.memories/*
+*.md
+*.md
+!ALSHSPEC.md
+!README.md

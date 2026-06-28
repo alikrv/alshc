@@ -4,7 +4,7 @@
 @main
 
 function main() int{
-    echo "=== Simple Chain Test ==="
+    println("=== Simple Chain Test ===")
     
     # Direct chain expression evaluation
     let result = chain {

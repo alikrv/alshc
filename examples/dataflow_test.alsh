@@ -8,20 +8,27 @@
 @stdlib
 
 @main
-function main() void {
-    echo "=== ALSH dataflow regression test ==="
+function main() noret {
+    println("=== ALSH dataflow regression test ===")
 
-    echo "--- shell pipe test ---"
-    # shell pipe semantics should route stdout through external commands
-    echo "one two three" | wc -w
+    println("--- shell pipe test ---")
+    # count words in string
+    let word_count = chain {
+        "one two three"
+        std::split(@, " ")
+        std::len()
+    }
+    println("word count = $word_count")
 
-    echo "--- ALSH stream pipeline test ---"
-    echo "one two three" -> std::upper() # -> println
+    println("--- ALSH stream pipeline test ---")
+    let upper = "one two three" -> std::upper()
+    println("upper = $upper")
 
-    echo "--- ALSH stream pipeline with explicit binding ---"
-    echo "one two three" -> std::split(@, " ") -> std::len() -> println
+    println("--- ALSH stream pipeline with explicit binding ---")
+    let pipeline = "one two three" -> std::split(@, " ") -> std::len()
+    println("pipeline result = $pipeline")
 
-    echo "--- value chain implicit single-arg binding ---"
+    println("--- value chain implicit single-arg binding ---")
     let words = chain {
         "hello world"
         std::split(@, " ")
@@ -29,14 +36,14 @@ function main() void {
     }
     println("word count = $words")
 
-    echo "--- value chain explicit @ binding ---"
+    println("--- value chain explicit @ binding ---")
     let found = chain {
         "goodbye world"
         std::contains(@, "world")
     }
     println("contains world = $found")
 
-    echo "--- value chain literal to function ---"
+    println("--- value chain literal to function ---")
     let trimmed = chain {
         "   spaced out   "
         std::trim()

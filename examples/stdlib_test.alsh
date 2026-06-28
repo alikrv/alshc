@@ -3,8 +3,8 @@
 
 @stdlib
 
-function test_print() void {
-    echo "--- print / println / eprint ---"
+function test_print() noret {
+    println("--- print / println / eprint ---")
 
     println("hello from println")
     print("hello from print, ")
@@ -13,8 +13,8 @@ function test_print() void {
     eprintln("this too, with newline")
 }
 
-function test_input() void {
-    echo "--- input ---"
+function test_input() noret {
+    println("--- input ---")
 
     # uncomment to test interactively
     # let name = input("what is your name? ")
@@ -23,8 +23,8 @@ function test_input() void {
     println("(input test skipped, interactive)")
 }
 
-function test_env() void {
-    echo "--- env ---"
+function test_env() noret {
+    println("--- env ---")
 
     let home = env("HOME")
     let shell = env("SHELL")
@@ -37,8 +37,8 @@ function test_env() void {
     println("missing no default: $missing_no_default")   # should be ""
 }
 
-function test_file_io() void {
-    echo "--- file io ---"
+function test_file_io() noret {
+    println("--- file io ---")
 
     let path = "/tmp/alsh_stdlib_test.txt"
 
@@ -63,8 +63,8 @@ function test_file_io() void {
     println("cleanup: done")
 }
 
-function test_string() void {
-    echo "--- string utils ---"
+function test_string() noret {
+    println("--- string utils ---")
 
     let s = "  Hello, World!  "
     let trimmed = trim($s)
@@ -116,8 +116,8 @@ function test_string() void {
     println("len(Hello): $len_string")
 }
 
-function test_units() void {
-    echo "--- unit formatting ---"
+function test_units() noret {
+    println("--- unit formatting ---")
 
     let gb = format_gb("1000000")
     println("format_gb(1000000): $gb")
@@ -126,8 +126,8 @@ function test_units() void {
     println("format_gib(1048576): $gib")
 }
 
-function test_array() void {
-    echo "--- array utils ---"
+function test_array() noret {
+    println("--- array utils ---")
 
     let arr = split("one,two,three", ",")
     let len_arr = len($arr)
@@ -156,8 +156,8 @@ function test_array() void {
     println("contains two: $contains_two")
 }
 
-function test_math() void {
-    echo "--- math helpers ---"
+function test_math() noret {
+    println("--- math helpers ---")
 
     let vmin = min(10, 20)
     let vmax = max(10, 20)
@@ -171,8 +171,8 @@ function test_math() void {
     println("odd: $is_odd")
 }
 
-function test_path_fs() void {
-    echo "--- path / filesystem utilities ---"
+function test_path_fs() noret {
+    println("--- path / filesystem utilities ---")
 
     let path = "/tmp/alsh_stdlib_path_test.txt"
     writefile(path, "ok")
@@ -199,8 +199,8 @@ function test_path_fs() void {
     c::remove(path)
 }
 
-function test_process() void {
-    echo "--- process / system utilities ---"
+function test_process() noret {
+    println("--- process / system utilities ---")
 
     let which_bash = which("bash")
     let pid_value = pid()
@@ -213,8 +213,8 @@ function test_process() void {
     println("sleep: done")
 }
 
-function test_exit() void {
-    echo "--- exit ---"
+function test_exit() noret {
+    println("--- exit ---")
     println("about to call exit(0)... just kidding")
     # exit(0)   # commented out, would stop the whole script
     println("exit: skipped")

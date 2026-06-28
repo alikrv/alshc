@@ -263,10 +263,6 @@ pub struct ControlFlowParser {
 impl ControlFlowParser {
     pub fn new(input: &str) -> Self {
         let lines: Vec<String> = input.lines().map(|s| s.trim().to_string()).collect();
-        eprintln!("[PARSER] Loaded {} lines", lines.len());
-        for (i, line) in lines.iter().enumerate() {
-            eprintln!("[PARSER] Line {}: {:?}", i, line);
-        }
         ControlFlowParser { lines, pos: 0, has_main: false, just_run: false, main_function_name: None }
     }
 
@@ -281,7 +277,7 @@ impl ControlFlowParser {
                     continue;
                 }
             };
-            
+
             // Check for preprocessor directives
             if line.starts_with("@main") {
                 self.has_main = true;
@@ -309,7 +305,7 @@ impl ControlFlowParser {
                 self.advance();
                 continue;
             }
-            
+
             if let Some(stmt) = self.parse_statement()? {
                 statements.push(stmt);
             }
@@ -360,16 +356,20 @@ impl ControlFlowParser {
         result
     }
 
+    fn normalize_expression_text(expr_str: &str) -> String {
+        expr_str.trim().trim_end_matches(';').trim().to_string()
+    }
+
     fn parse_expression(&self, expr_str: &str) -> Result<Expression, String> {
-        let trimmed = expr_str.trim();
-        
+        let trimmed = Self::normalize_expression_text(expr_str);
+
         // Parenthesized expression
         if trimmed.starts_with('(') && trimmed.ends_with(')') {
             let inner = &trimmed[1..trimmed.len()-1];
             // Check if it's a binary operation inside
             return self.parse_binary_op(inner);
         }
-        
+
         // String literal
         if trimmed.starts_with('"') && trimmed.ends_with('"') {
             let content = &trimmed[1..trimmed.len()-1];
@@ -379,7 +379,7 @@ impl ControlFlowParser {
             let content = &trimmed[1..trimmed.len()-1];
             return Ok(Expression::Literal(Value::String(content.to_string())));
         }
-        
+
         // Number
         if let Ok(n) = trimmed.parse::<i64>() {
             return Ok(Expression::Literal(Value::Number(n)));
@@ -387,17 +387,17 @@ impl ControlFlowParser {
         if let Ok(f) = trimmed.parse::<f64>() {
             return Ok(Expression::Literal(Value::Float(f)));
         }
-        
+
         // Variable
         if trimmed.starts_with('$') {
             return Ok(Expression::Variable(trimmed[1..].to_string()));
         }
-        
+
         // Binary operations (without parentheses)
         if trimmed.contains('+') || trimmed.contains('-') || trimmed.contains('*') || trimmed.contains('/') {
-            return self.parse_binary_op(trimmed);
+            return self.parse_binary_op(&trimmed);
         }
-        
+
         // C call
         if trimmed.starts_with("c::") {
             let rest = &trimmed[3..];
@@ -414,7 +414,7 @@ impl ControlFlowParser {
                 }
             }
         }
-        
+
         // std:: call (Rust standard library functions)
         if trimmed.starts_with("std::") {
             let rest = &trimmed[5..];
@@ -431,7 +431,7 @@ impl ControlFlowParser {
                 }
             }
         }
-        
+
         // Function call
         if let Some(open_paren) = trimmed.find('(') {
             if trimmed.ends_with(')') {
@@ -447,20 +447,20 @@ impl ControlFlowParser {
                 }
             }
         }
-        
+
         // Default to string literal for now
         Ok(Expression::Literal(Value::String(trimmed.to_string())))
     }
 
     fn parse_binary_op(&self, expr_str: &str) -> Result<Expression, String> {
-        let trimmed = expr_str.trim();
-        
+        let trimmed = Self::normalize_expression_text(expr_str);
+
         // Find the operator with lowest precedence (rightmost)
         // Precedence: +, - (lower) then *, / (higher)
         let mut add_sub_pos = None;
         let mut mul_div_pos = None;
         let mut paren_depth = 0;
-        
+
         for (i, ch) in trimmed.chars().enumerate() {
             match ch {
                 '(' => paren_depth += 1,
@@ -474,7 +474,7 @@ impl ControlFlowParser {
                 _ => {}
             }
         }
-        
+
         // Use addition/subtraction as primary split, or multiplication/division
         if let Some(pos) = add_sub_pos {
             let op_char = trimmed.chars().nth(pos).unwrap();
@@ -489,14 +489,14 @@ impl ControlFlowParser {
             let op = if op_char == '*' { BinOp::Mul } else { BinOp::Div };
             return Ok(Expression::BinaryOp(Box::new(left), op, Box::new(right)));
         }
-        
+
         // Not a binary op, parse as normal
-        self.parse_simple_expression(expr_str)
+        self.parse_simple_expression(&trimmed)
     }
 
     fn parse_simple_expression(&self, expr_str: &str) -> Result<Expression, String> {
-        let trimmed = expr_str.trim();
-        
+        let trimmed = Self::normalize_expression_text(expr_str);
+
         // String literal
         if trimmed.starts_with('"') && trimmed.ends_with('"') {
             let content = &trimmed[1..trimmed.len()-1];
@@ -506,7 +506,7 @@ impl ControlFlowParser {
             let content = &trimmed[1..trimmed.len()-1];
             return Ok(Expression::Literal(Value::String(content.to_string())));
         }
-        
+
         // Number
         if let Ok(n) = trimmed.parse::<i64>() {
             return Ok(Expression::Literal(Value::Number(n)));
@@ -514,24 +514,24 @@ impl ControlFlowParser {
         if let Ok(f) = trimmed.parse::<f64>() {
             return Ok(Expression::Literal(Value::Float(f)));
         }
-        
+
         // Variable
         if trimmed.starts_with('$') {
             return Ok(Expression::Variable(trimmed[1..].to_string()));
         }
-        
+
         // Default to string literal for now
         Ok(Expression::Literal(Value::String(trimmed.to_string())))
     }
 
     fn parse_expression_statement(&mut self, line: &str) -> Result<Option<Expression>, String> {
-        let trimmed = line.trim();
+        let trimmed = Self::normalize_expression_text(line);
         if trimmed.is_empty() {
             return Ok(None);
         }
         // Simple check: if it looks like a function call or expression
         if trimmed.contains('(') || trimmed.starts_with('$') || trimmed.starts_with('"') || trimmed.chars().next().unwrap().is_digit(10) {
-            match self.parse_expression(trimmed) {
+            match self.parse_expression(&trimmed) {
                 Ok(expr) => Ok(Some(expr)),
                 Err(_) => Ok(None),
             }
@@ -605,7 +605,7 @@ impl ControlFlowParser {
     }
 
     fn parse_assignment(&mut self, line: &str) -> Result<Option<Statement>, String> {
-        let trimmed = line.trim();
+        let trimmed = Self::normalize_expression_text(line);
         if !trimmed.starts_with('$') {
             return Ok(None);
         }
@@ -1320,7 +1320,7 @@ impl ControlFlowParser {
 
         let condition = self.parse_condition(cond_str)?;
         self.advance();  // Move past while line
-        
+
         let body = if brace_style {
             // Brace was on same line, now parse the body
             self.parse_block_until_matching_brace()?
@@ -1490,43 +1490,34 @@ impl ControlFlowParser {
 
     fn parse_block_until_matching_brace(&mut self) -> Result<Vec<Statement>, String> {
         let mut statements = Vec::new();
-        eprintln!("[BLOCK] Starting parse_block at pos={}, total lines={}", self.pos, self.lines.len());
 
         while let Some(line) = self.current_line() {
             let trimmed = line.trim();
-            eprintln!("[BLOCK] loop: pos={} line={:?} current_line returns Some", self.pos, trimmed);
-            
+
             // Skip empty lines
             if trimmed.is_empty() {
                 self.advance();
                 continue;
             }
-            
+
             // If this line is just a closing brace, we're done
             if trimmed == "}" {
-                eprintln!("[BLOCK] Found closing brace, returning {} statements", statements.len());
                 self.advance();
                 return Ok(statements);
             }
-            
+
             // If line starts with }, we're done
             if trimmed.starts_with('}') {
-                eprintln!("[BLOCK] Found line starting with close brace, returning {} statements", statements.len());
                 self.advance();
                 return Ok(statements);
             }
 
             // Parse the statement
-            eprintln!("[BLOCK] Calling parse_statement at pos={}", self.pos);
             if let Some(stmt) = self.parse_statement()? {
-                eprintln!("[BLOCK] Got statement, now at pos={}", self.pos);
                 statements.push(stmt);
-            } else {
-                eprintln!("[BLOCK] parse_statement returned None, now at pos={}", self.pos);
             }
         }
 
-        eprintln!("[BLOCK] Loop exited, pos={}, lines.len()={}, current_line returned None", self.pos, self.lines.len());
         Err("Expected matching }".to_string())
     }
 
@@ -1640,6 +1631,25 @@ impl ControlFlowParser {
         }
 
         Ok(Condition::Command(self.parse_expression(cond)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_return_value_strips_trailing_semicolon() {
+        let mut parser = ControlFlowParser::new("return 11;");
+        let statements = parser.parse().unwrap();
+
+        match &statements[0] {
+            Statement::Return { value } => match value {
+                Some(Expression::Literal(Value::Number(11))) => {}
+                other => panic!("expected numeric return, got {:?}", other),
+            },
+            other => panic!("expected return statement, got {:?}", other),
+        }
     }
 }
 

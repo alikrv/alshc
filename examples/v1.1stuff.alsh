@@ -1,4 +1,4 @@
-function test_new_stuff() void {
+function test_new_stuff() noret {
     test_structs()
     test_enums()
     test_scan()
@@ -18,43 +18,43 @@ enum bread_id {
     croissant
 }
 
-function french_function() void {
-    echo "french_function"
+function french_function() noret {
+    println("french_function")
 }
 
-function other_function() void {
-    echo "other_function"
+function other_function() noret {
+    println("other_function")
 }
 
-function snack_function() void {
-    echo "snack_function"
+function snack_function() noret {
+    println("snack_function")
 }
 
-function test_structs() void {
-    echo "--- test structs ---"
+function test_structs() noret {
+    println("--- test structs ---")
     let alice = person { age: 28 name: "Alice" height: 1.70 }
-    echo "name: $alice.name"
-    echo "age: $alice.age"
-    echo "height: $alice.height"
+    println("name: $alice.name")
+    println("age: $alice.age")
+    println("height: $alice.height")
 
     let older = person { age: ($alice.age + 5) name: $alice.name height: $alice.height }
-    echo "older.age: $older.age"
+    println("older.age: $older.age")
 }
 
-function test_enums() void {
-    echo "--- test enums ---"
+function test_enums() noret {
+    println("--- test enums ---")
     let loaf = bread_id.croissant
-    echo "chosen bread: $loaf"
+    println("chosen bread: $loaf")
 
     if ($loaf == bread_id.croissant) {
-        echo "croissant match"
+        println("croissant match")
     } else {
-        echo "other bread"
+        println("other bread")
     }
 }
 
-function test_scan() void {
-    echo "--- test scan ---"
+function test_scan() noret {
+    println("--- test scan ---")
     let current_bread = bread_id.fougasse
 
     scan of bread_id {
@@ -65,8 +65,8 @@ function test_scan() void {
     }
 }
 
-function test_switch() void {
-    echo "--- test switch ---"
+function test_switch() noret {
+    println("--- test switch ---")
     let current_bread = bread_id.croissant
 
     switch on current_bread {

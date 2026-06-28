@@ -1,8 +1,8 @@
 
 @main
-function do_some_c_testing() void {
+function do_some_c_testing() noret {
     c::puts("Hello world!")
-    
+
     let num = 1
     c::printf("Hey! %d\n", num)
 

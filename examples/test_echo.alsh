@@ -1,6 +1,7 @@
 #!/usr/bin/env alsh
 
+@stdlib
 @main
-function main() void {
-    echo "Hello from ALSh"
+function main() noret {
+    println("Hello from ALSH")
 }

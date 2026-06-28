@@ -3,6 +3,6 @@
 @stdlib
 
 @main
-function main() void {
+function main() noret {
     std::println("Hello from std::println")
 }

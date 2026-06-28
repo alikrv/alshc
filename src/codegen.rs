@@ -8,6 +8,8 @@ use inkwell::AddressSpace;
 use std::collections::HashMap;
 
 use crate::control_flow::{Expression, Statement, Condition};
+// For runtime symbols
+extern crate libc;
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
@@ -76,8 +78,11 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         let i32_type = self.context.i32_type();
-        let i8_ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
-        let argv_type = i8_ptr_type.ptr_type(AddressSpace::default());
+        let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
+        let argv_type = self.context.ptr_type(AddressSpace::default());
+        // alsh_str type: { i64, i64, i8* }
+        let i64_type = self.context.i64_type();
+        let _alsh_str_type = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
 
         if self.has_main {
             // @main is set: the marked function is already generated as "main"
@@ -120,8 +125,10 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn generate_function(&mut self, name: &str, _params: &[String], body: &[Statement]) -> Result<(), String> {
         let i32_type = self.context.i32_type();
-        let i8_ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
-        let argv_type = i8_ptr_type.ptr_type(AddressSpace::default());
+        let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
+        let i64_type = self.context.i64_type();
+        let _alsh_str_type = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
+        let argv_type = self.context.ptr_type(AddressSpace::default());
 
         // If this function is marked with @main, name it "main"
         let actual_name = if self.has_main && self.main_function_name.as_ref().map(|n| n == name).unwrap_or(false) {
@@ -552,10 +559,23 @@ impl<'ctx> CodeGen<'ctx> {
                 match val {
                     Value::Number(n) => Ok(self.context.i32_type().const_int(*n as u64, false).into()),
                     Value::String(s) => {
-                        let str_val = self.context.const_string(s.as_bytes(), true);
-                        let global_str = self.module.add_global(str_val.get_type(), None, "str");
-                        global_str.set_initializer(&str_val);
-                        Ok(global_str.as_pointer_value().into())
+                        // Create a global C string and then create a global alsh_str pointing at it
+                        let bytes = s.as_bytes();
+                        let str_val = self.context.const_string(bytes, true);
+                        let global_chars = self.module.add_global(str_val.get_type(), None, "str_chars");
+                        global_chars.set_initializer(&str_val);
+                        // alsh_str instance as a global struct
+                        let i64_type = self.context.i64_type();
+                        let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
+                        let alsh_str_ty = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
+                        let alsh_str_global = self.module.add_global(alsh_str_ty, None, "str_obj");
+                        // Build initializer: { len, cap, ptr }
+                        let len = i64_type.const_int(bytes.len() as u64, false);
+                        let cap = i64_type.const_int(bytes.len() as u64, false);
+                        let ptr = global_chars.as_pointer_value();
+                        let init = alsh_str_ty.const_named_struct(&[len.into(), cap.into(), ptr.into()]);
+                        alsh_str_global.set_initializer(&init);
+                        Ok(alsh_str_global.as_pointer_value().into())
                     }
                     _ => Err("Unsupported literal type".to_string()),
                 }
@@ -640,8 +660,13 @@ impl<'ctx> CodeGen<'ctx> {
                 let arg_val = self.generate_expression(&args[0])?;
 
                 match arg_val {
-                    BasicValueEnum::PointerValue(str_ptr) => {
-                        // String argument
+                    BasicValueEnum::PointerValue(ptr_val) => {
+                        // Pointer may be a pointer to alsh_str; extract .data field
+                        let i64_type = self.context.i64_type();
+                        let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
+                        let alsh_str_ty = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
+                        let data_ptr = self.builder.build_struct_gep(alsh_str_ty, ptr_val, 2, "data_ptr").map_err(|e| e.to_string())?;
+                        let data = self.builder.build_load(i8_ptr_type, data_ptr, "data_load").map_err(|e| e.to_string())?;
                         let format_str = self.context.const_string(b"%s\n", true);
                         let global_format = self.module.add_global(format_str.get_type(), None, "format");
                         global_format.set_initializer(&format_str);
@@ -650,7 +675,7 @@ impl<'ctx> CodeGen<'ctx> {
                             self.context.ptr_type(AddressSpace::default()),
                             "format_ptr",
                         ).map_err(|e| e.to_string())?;
-                        let _ = self.builder.build_call(printf_fn, &[format_ptr.into(), str_ptr.into()], "println").map_err(|e| e.to_string())?;
+                        let _ = self.builder.build_call(printf_fn, &[format_ptr.into(), data.into()], "println").map_err(|e| e.to_string())?;
                     }
                     BasicValueEnum::IntValue(int_val) => {
                         // Integer argument
@@ -681,11 +706,54 @@ impl<'ctx> CodeGen<'ctx> {
         let c_fn = self.get_c_function(name)?;
         let mut arg_vals = Vec::new();
         for arg in args {
-            arg_vals.push(self.generate_expression(arg)?.into());
+            arg_vals.push(self.generate_c_call_argument(arg)?.into());
         }
         let _ = self.builder.build_call(c_fn, &arg_vals, &format!("c_{}", name)).map_err(|e| e.to_string())?;
         // Return a dummy value - the actual return depends on the C function
         Ok(self.context.i32_type().const_int(0, false).into())
+    }
+
+    fn generate_c_call_argument(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, String> {
+        match expr {
+            Expression::Literal(crate::control_flow::Value::String(s)) => {
+                let str_val = self.context.const_string(s.as_bytes(), true);
+                let global_chars = self.module.add_global(str_val.get_type(), None, "cstr");
+                global_chars.set_initializer(&str_val);
+                let ptr_type = self.context.ptr_type(AddressSpace::default());
+                let cstr_ptr = self.builder.build_pointer_cast(
+                    global_chars.as_pointer_value(),
+                    ptr_type,
+                    "cstr_ptr",
+                ).map_err(|e| e.to_string())?;
+                Ok(cstr_ptr.into())
+            }
+            Expression::Variable(name) => {
+                if let Some(var) = self.variables.get(name) {
+                    if let Some(var_type) = self.variable_types.get(name) {
+                        if var_type == "pointer" {
+                            let loaded = self.builder.build_load(self.context.ptr_type(AddressSpace::default()), *var, name).map_err(|e| e.to_string())?;
+                            if let BasicValueEnum::PointerValue(ptr_val) = loaded {
+                                let i64_type = self.context.i64_type();
+                                let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
+                                let alsh_str_ty = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
+                                let data_ptr = self.builder.build_struct_gep(alsh_str_ty, ptr_val, 2, "data_ptr").map_err(|e| e.to_string())?;
+                                let data = self.builder.build_load(i8_ptr_type, data_ptr, "data_load").map_err(|e| e.to_string())?;
+                                Ok(data)
+                            } else {
+                                Ok(loaded)
+                            }
+                        } else {
+                            self.generate_expression(expr)
+                        }
+                    } else {
+                        self.generate_expression(expr)
+                    }
+                } else {
+                    self.generate_expression(expr)
+                }
+            }
+            _ => self.generate_expression(expr),
+        }
     }
 
     fn get_printf_fn(&self) -> FunctionValue<'ctx> {

@@ -1,0 +1,9 @@
+// this is a comment
+
+@main
+function this_is_the_main_function() int {
+    c::puts("Hello world from C")
+    std::println("Hello world from the standard library")
+    // do something
+    return 0;
+}

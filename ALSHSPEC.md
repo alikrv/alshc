@@ -1,5 +1,8 @@
 #  ALSH Language Specification
 
+## Overview
+
+This version of ALSH spec is a **strictly compiled language** targeting native code generation via LLVM. (Different to the much more vibe-based interpreted version)
 ## 1. Lexical Structure
 
 ### 1.1 Identifiers
@@ -128,6 +131,9 @@ When `@stdlib` is present, the same functions may also be called without the `st
 ## 3. Variables & Scope
 ### 3.1 Declaration
 `let x = expression`
+`let const x = expression`
+
+Variables are declared with `let` (mutable) or `let const` (immutable). Types are inferred by the compiler from the assigned value.
 
 ### 3.2 Global variables
 `!global let author = "Alina"`
@@ -160,18 +166,27 @@ let x = 10
 ```
 ## 4. Types
 
-Minimal v1 types:
+### 4.0 Primitive Types
 
-- `int`
-- `string`
-- `array`
-- `bool` (implicit via expressions)
+ALSH supports the following primitive types (matching C semantics):
 
-### 4.1 Arrays
+- `int` - signed integer
+- `float` - single-precision floating point (4 bytes)
+- `double` - double-precision floating point (8 bytes)
+- `char` - single ASCII character (1 byte)
+- `bool` - boolean value (implicit via expressions)
+
+### 4.1 String Type
+
+- `str` - UTF-8 string with known length and capacity
+
+Strings are heap-allocated and managed by the runtime, storing both length and capacity information.
+
+### 4.2 Arrays
 - `[1, 2, 3]`
 - `["a", "b"]`
 
-### 4.2 Structs (v1.1)
+### 4.3 Structs (v1.1)
 Structs are named records with typed fields.
 
 Syntax:
@@ -196,7 +211,7 @@ echo $p.name
 let h = $p.height
 ```
 
-### 4.3 Enums (v1.1)
+### 4.4 Enums (v1.1)
 Enums define a closed set of named values.
 
 Syntax:
@@ -221,13 +236,26 @@ if ($favorite == bread_id.croissant) {
 }
 ```
 
-### 4.4 Dynamic typing
+### 4.5 Pointers
 
-Variables are dynamically typed:
+Pointers work exactly like in C:
+
+- `int*` - pointer to int
+- `str*` - pointer to str
+- `*ptr` - dereference a pointer
+- `&var` - take address of variable
+- `ptr->field` - access struct field through pointer
+
+Example:
 ```
-let x = 5
-let x = "hello"
+let x = 10
+let ptr = &x
+let val = *ptr
 ```
+
+### 4.6 Type Inference
+
+Variables declared with `let` have their types inferred from the assigned expression. The compiler determines the type automatically based on the literal or return value of the expression.
 ## 5. Expressions
 ### 5.1 Arithmetic
 `( expression )`
@@ -369,17 +397,62 @@ switch on <expression> {
 
 ## 8.  Functions
 ### 8.1 Declaration
+
+Functions have explicitly typed parameters and return types:
+
 ```
-function name(param1, param2) {
+function name(int param1, str param2) int {
     ...
 }
 ```
+
+General syntax:
+```
+function name(type1 param1, type2 param2, ...) returntype {
+    function body
+}
+```
+
+**Return Type Specification:**
+- Specify the return type after the parameter list and before the opening brace
+- Use the actual type: `int`, `str`, `float`, `double`, `char`, etc.
+- For functions that do not return a value, use `noret` instead of `void`:
+
+```
+function print_message(str msg) noret {
+    echo $msg
+}
+```
+
+**Parameter Declarations:**
+- Use C-like syntax: `typename paramname`
+- Each parameter must have an explicit type
+- Parameters are passed by value
+
+Example with multiple parameters and return type:
+```
+function add(int a, int b) int {
+    return ($a + $b)
+}
+
+function greet(str name) str {
+    return ("Hello, " + $name)
+}
+```
 ### 8.2 Return
-`return value`
+
+`return expression`
+
+Returns a value from the function. The returned value must match the function's declared return type. If the function is declared with `noret`, no return statement should be executed (the function exits through other control flow).
 
 ### 8.3 Arguments
 
-Passed by value (conceptually)
+Arguments are passed by value. For large structures or to avoid copying, pass pointers:
+```
+function modify(int* ptr) noret {
+    *ptr = 42
+}
+```
 
 ## 9. Error Handling
 ### 9.1 Try/Catch
@@ -396,7 +469,6 @@ catches command failures / runtime errors
 ### 10.1 Command vs Function
 ```
 Syntax	Meaning
-echo "hi"	shell command
 echo("hi")	ALSH function
 c::puts("hi")	C function
 ```

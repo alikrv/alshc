@@ -1,5 +1,7 @@
 #  ALSH Language Specification
 
+_COMPILER_SPEC
+
 ## Overview
 
 This version of ALSH spec is a **strictly compiled language** targeting native code generation via LLVM. (Different to the much more vibe-based interpreted version)
@@ -34,8 +36,8 @@ Note: the `end*` tokens are legacy-style terminators and are supported mostly as
 - `@import`
 - `@define`
 - `@main`
-- `@justrunit` 
-- `@justcarryon` 
+- `@justrunit`
+- `@justcarryon`
 - `@stdlib`
 - `@noffi`
 - `!global`
@@ -110,13 +112,13 @@ Allows top-level execution:
 When this directive is present, runtime errors during command execution or function calls
 are reported but do not abort script execution. The script continues with the next statement.
 
-### 2.6`@noffi`
+### 2.6 `@noffi`
 `@noffi`
 
 When this directive is present, any `c::` function call in the current file is disabled.
 The call is removed during preprocessing so the C function is never invoked.
 
-### 2.7 @stdlib`
+### 2.7 @stdlib
 `@stdlib`
 
 Enables the ALSH standard library shorthand names in the current script.
@@ -515,9 +517,9 @@ Syntax:
 command1 -> command2 -> command3
 
 Semantics:
-- Executes a stream-based transformation pipeline. 
-- Each stage receives the stdout of the previous stage. 
-- Still operates on string/byte streams, not structured values. 
+- Executes a stream-based transformation pipeline.
+- Each stage receives the stdout of the previous stage.
+- Still operates on string/byte streams, not structured values.
 - May include both system commands and ALSH functions.
 
 Rules:
@@ -556,9 +558,9 @@ Designed for structured, composable transformations
 
 Inside a chain block:
 
-`@` represents the output of the previous step. 
-If a function has exactly one parameter, `@` is implicitly applied. 
-If a function has multiple parameters, `@` must be explicitly provided. 
+`@` represents the output of the previous step.
+If a function has exactly one parameter, `@` is implicitly applied.
+If a function has multiple parameters, `@` must be explicitly provided.
 
 ### 12.3.2 Rules
 #### Rule 1: Implicit single-argument binding

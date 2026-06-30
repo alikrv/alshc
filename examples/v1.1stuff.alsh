@@ -77,3 +77,9 @@ function test_switch() noret {
         default: other_function()
     }
 }
+
+@main
+function test_main() int {
+    //
+    return 0
+}

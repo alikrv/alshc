@@ -3,6 +3,7 @@
 @stdlib
 
 @main
-function main() noret {
+function main() int {
     println("test1")
+    return 0
 }

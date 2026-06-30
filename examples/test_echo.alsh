@@ -2,6 +2,7 @@
 
 @stdlib
 @main
-function main() noret {
+function main() int {
     println("Hello from ALSH")
+    return 0
 }

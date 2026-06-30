@@ -5,7 +5,7 @@
 
 function main() int {
     println("=== Test bare len() in chain ===")
-    
+
     # Using bare len() instead of std::len()
     let len_result = chain {
         "hello world"
@@ -13,4 +13,6 @@ function main() int {
         len()
     }
     println("len_result = $len_result")
+
+    return 0
 }

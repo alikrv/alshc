@@ -1,0 +1,7 @@
+@main
+function test_c_printf_varargs() int {
+    std::println("test1")
+    let var1 = 43
+    let var2 = "heY!" // a string
+    c::printf("%d, %s\n", $var1, $var2)
+}

@@ -1,14 +1,11 @@
-#!/usr/bin/env alsh
-
-//yes, both `//` and `#` comments (interchangable)
-
 @main
-function test_a_simple_while_loop() noret {
+function test_a_simple_while_loop() int {
     let i = 0
     while ($i < 10) {
         $i = ($i + 1)   // increment
         std::println("doing simple loop, i=$i")
     }
+    return 0
 }
 
 function test_some_c_function() noret {

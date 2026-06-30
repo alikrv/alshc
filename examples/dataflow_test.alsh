@@ -8,7 +8,7 @@
 @stdlib
 
 @main
-function main() noret {
+function main() int {
     println("=== ALSH dataflow regression test ===")
 
     println("--- shell pipe test ---")
@@ -49,4 +49,6 @@ function main() noret {
         std::trim()
     }
     println("trimmed = '$trimmed'")
+
+    return 0
 }

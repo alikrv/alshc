@@ -5,3 +5,5 @@ target
 *.md
 !ALSHSPEC.md
 !README.md
+!ISSUES.md
+!NEW_FEATURES.md

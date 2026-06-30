@@ -1,5 +1,3 @@
-#!/usr/bin/env alsh
-
 @stdlib
 @define PI 3.14159
 
@@ -17,6 +15,7 @@ function test_variables_and_scopes() noret {
 
     // y is not accessible here, should error if uncommented
     // println("y outside block: $y")
+}
 
 function test_looops() noret {
     let count = 0
@@ -70,9 +69,10 @@ function assignment_test() noret {
     println("b (assigned from a): $b")
 
 @main
-function test_stuff() noret {
+function test_stuff() int {
     //test_variables_and_scopes()
     //test_looops()
     test_lops()
     //assignment_test()
+    return 0
 }

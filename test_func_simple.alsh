@@ -1,4 +1,6 @@
 @main
 function test() {
     std::println("hello")
+    std::print("hello") // forgot about std::print
+    std::println("hello")
 }

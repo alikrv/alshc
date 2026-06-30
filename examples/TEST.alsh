@@ -6,7 +6,7 @@
 @include "tests/noffi_test.alsh"
 
 @main
-function test_stuff() noret{
+function test_stuff() int {
     //run_all_cstdlib_tests()
     //test_time()
     //test_string()
@@ -23,4 +23,6 @@ function test_stuff() noret{
 
     run_stdlib_tests()
     test_noffi()
+
+    return 0
 }

@@ -1,0 +1,14 @@
+@stdlib
+
+@main
+function main() int {
+    std::println("lets test shadowing")
+    let var1 = "hey (with one Y)"
+    std::println($var1)
+    {
+        let var1 = "heyy (with two Y's)"
+        std::println($var1)
+    }
+    return 0
+    // working, but why is std::println printing a '{'??
+}

@@ -1,9 +1,10 @@
 #!/usr/local/bin/alsh
 
 @main
-function do_some_stuff() noret {
+function do_some_stuff() int {
     c::puts("Hellow")
     _bail
     let pid = c::getpid()
     std::println("$pid")
+    return 0
 }

@@ -2,7 +2,7 @@
 
 @stdlib
 @main
-function an_example() noret{
+function an_example() int {
 
     let myvar = "Hello, ALSH!"
     println($myvar)
@@ -20,4 +20,5 @@ function an_example() noret{
     println($message)
     println($message)
 
+    return 0
 }

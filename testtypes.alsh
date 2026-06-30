@@ -1,0 +1,61 @@
+function foo_func() bool {
+    // whatever, this function returns a bool
+    let cond = true // special word "true", `cond` is inferred to a bool
+
+    //if ($cond == true) {
+    //    return false
+    //}
+    return $cond
+}
+
+@main
+function test_some_types() int {
+    // its important that the types are enforced to in the future have C compatibility/interop
+
+    let var1 = 44
+    // that should be inferred to an int
+
+    let var2 = "hello"
+    // that should be inferred to the ALSH-specific high-level type string
+
+    let var3 = 'a'
+    // a single character string? no, a simple char
+
+    let var4 = ($var1 + 55)
+    // arithmethic block, but both operands are ints, so inferred to int
+
+    //let var5 = 55.3f
+    // thats a float!
+
+    //let var6 = ($var1 + $var5)
+    // arithmethic block, should be inferred to the type of the biggest type among its operands (in this case a float)
+
+    //let var7 = foo_func()
+    // functions are objects too (though their type isnt inferred but typed in their declaration). var7 gets inferred to bool, as its assigned to a function of said type
+
+    // this is what has worked as of now
+    std::println($var1)
+    std::println($var2)
+    std::println($var3)
+    std::println($var4)
+
+    // issues:
+    // 1: std::println should accept more than one arg `alshc: codegen error: Codegen error in function test_some_types: std::println expects 1 argument`
+    // 2: the commented out variables have issues:
+    //  2.1: var5: floats haven't been properly implemented yet
+    //  2.2: var6: same
+    //  2.3: var7: other functions cant be used? `shc: codegen error: Codegen error in function test_some_types: Unknown function: foo_func`
+    // 3: the commented out if-statement from foo_func was not working:
+    // thread 'main' (474059) panicked at src/codegen.rs:533:64:
+    // Found PointerValue(PointerValue { ptr_value: Value { name: "cond22", address: 0x56212f7f1290, is_const: false, is_null: false, is_undef: false, llvm_value: "  %cond22 = load ptr, ptr %cond, align 8", llvm_type: "ptr" } }) but expected the IntValue variant
+    // if you ask me, its because "bools" havent been properly implemented yet.
+
+    // extra: add the following operators: std::sizeof($any_var_here), std::sizeoft(<typename>), std::typeof($var_here)
+
+    // another thing: a new way of declaring function params: `anytype`
+    // lets say i declare:
+    // function bar_func(int param1, str param2, anytype param3) {...}
+    // there, the caller can pass in a param3 of any type they want.
+
+    return 0;
+}

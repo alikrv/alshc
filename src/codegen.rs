@@ -1,13 +1,14 @@
 // src/codegen.rs
+use crate::control_flow::StringPart;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue, IntValue};
-use inkwell::basic_block::BasicBlock;
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use std::collections::HashMap;
 
-use crate::control_flow::{Expression, Statement, Condition};
+use crate::control_flow::{Condition, Expression, Statement};
 // For runtime symbols
 extern crate libc;
 
@@ -63,7 +64,11 @@ impl<'ctx> CodeGen<'ctx> {
 
         for stmt in statements {
             match stmt {
-                Statement::FunctionDef { name, params: _, body } => {
+                Statement::FunctionDef {
+                    name,
+                    params: _,
+                    body,
+                } => {
                     functions_def.insert(name.clone(), body.clone());
                 }
                 _ => {
@@ -82,7 +87,10 @@ impl<'ctx> CodeGen<'ctx> {
         let argv_type = self.context.ptr_type(AddressSpace::default());
         // alsh_str type: { i64, i64, i8* }
         let i64_type = self.context.i64_type();
-        let _alsh_str_type = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
+        let _alsh_str_type = self.context.struct_type(
+            &[i64_type.into(), i64_type.into(), i8_ptr_type.into()],
+            false,
+        );
 
         if self.has_main {
             // @main is set: the marked function is already generated as "main"
@@ -102,12 +110,15 @@ impl<'ctx> CodeGen<'ctx> {
             self.needs_return = true;
 
             for stmt in &top_level_statements {
-                self.generate_statement(stmt).map_err(|e| format!("Codegen error: {}", e))?;
+                self.generate_statement(stmt)
+                    .map_err(|e| format!("Codegen error: {}", e))?;
             }
 
             // Return 0 if we haven't already returned
             if self.needs_return {
-                let _ = self.builder.build_return(Some(&i32_type.const_int(0, false)));
+                let _ = self
+                    .builder
+                    .build_return(Some(&i32_type.const_int(0, false)));
             }
         } else if !top_level_statements.is_empty() {
             return Err("Top-level code found but no @main or @justrunit directive. Add @main above a function or use @justrunit.".to_string());
@@ -117,21 +128,37 @@ impl<'ctx> CodeGen<'ctx> {
             let main_fn = self.module.add_function("main", main_fn_type, None);
             let entry_bb = self.context.append_basic_block(main_fn, "entry");
             self.builder.position_at_end(entry_bb);
-            let _ = self.builder.build_return(Some(&i32_type.const_int(0, false)));
+            let _ = self
+                .builder
+                .build_return(Some(&i32_type.const_int(0, false)));
         }
 
         Ok(())
     }
 
-    fn generate_function(&mut self, name: &str, _params: &[String], body: &[Statement]) -> Result<(), String> {
+    fn generate_function(
+        &mut self,
+        name: &str,
+        _params: &[String],
+        body: &[Statement],
+    ) -> Result<(), String> {
         let i32_type = self.context.i32_type();
         let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
         let i64_type = self.context.i64_type();
-        let _alsh_str_type = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
+        let _alsh_str_type = self.context.struct_type(
+            &[i64_type.into(), i64_type.into(), i8_ptr_type.into()],
+            false,
+        );
         let argv_type = self.context.ptr_type(AddressSpace::default());
 
         // If this function is marked with @main, name it "main"
-        let actual_name = if self.has_main && self.main_function_name.as_ref().map(|n| n == name).unwrap_or(false) {
+        let actual_name = if self.has_main
+            && self
+                .main_function_name
+                .as_ref()
+                .map(|n| n == name)
+                .unwrap_or(false)
+        {
             "main"
         } else {
             name
@@ -158,12 +185,15 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Generate function body
         for stmt in body {
-            self.generate_statement(stmt).map_err(|e| format!("Codegen error in function {}: {}", name, e))?;
+            self.generate_statement(stmt)
+                .map_err(|e| format!("Codegen error in function {}: {}", name, e))?;
         }
 
         // Return 0 if we haven't already returned
         if self.needs_return {
-            let _ = self.builder.build_return(Some(&i32_type.const_int(0, false)));
+            let _ = self
+                .builder
+                .build_return(Some(&i32_type.const_int(0, false)));
         }
 
         // Restore variable state
@@ -178,8 +208,13 @@ impl<'ctx> CodeGen<'ctx> {
         match stmt {
             Statement::Let { name, value } => {
                 let val = self.generate_expression(value)?;
-                let var = self.builder.build_alloca(val.get_type(), name).map_err(|e| e.to_string())?;
-                self.builder.build_store(var, val).map_err(|e| e.to_string())?;
+                let var = self
+                    .builder
+                    .build_alloca(val.get_type(), name)
+                    .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_store(var, val)
+                    .map_err(|e| e.to_string())?;
 
                 // Track the variable type
                 let var_type = match val {
@@ -193,7 +228,8 @@ impl<'ctx> CodeGen<'ctx> {
                 };
 
                 self.variables.insert(name.clone(), var);
-                self.variable_types.insert(name.clone(), var_type.to_string());
+                self.variable_types
+                    .insert(name.clone(), var_type.to_string());
             }
             Statement::Command(cmd) => {
                 // For now, just print the command
@@ -201,12 +237,17 @@ impl<'ctx> CodeGen<'ctx> {
                 let str_val = self.context.const_string(cmd.as_bytes(), false);
                 let global_str = self.module.add_global(str_val.get_type(), None, "cmd");
                 global_str.set_initializer(&str_val);
-                let str_ptr = self.builder.build_pointer_cast(
-                    global_str.as_pointer_value(),
-                    self.context.ptr_type(AddressSpace::default()),
-                    "str_ptr",
-                ).map_err(|e| e.to_string())?;
-                self.builder.build_call(printf_fn, &[str_ptr.into()], "call").map_err(|e| e.to_string())?;
+                let str_ptr = self
+                    .builder
+                    .build_pointer_cast(
+                        global_str.as_pointer_value(),
+                        self.context.ptr_type(AddressSpace::default()),
+                        "str_ptr",
+                    )
+                    .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_call(printf_fn, &[str_ptr.into()], "call")
+                    .map_err(|e| e.to_string())?;
             }
             Statement::Expression(expr) => {
                 let _ = self.generate_expression(expr)?;
@@ -214,28 +255,45 @@ impl<'ctx> CodeGen<'ctx> {
             Statement::While { condition, body } => {
                 self.generate_while(condition, body)?;
             }
-            Statement::If { condition, then_block, elif_blocks, else_block } => {
+            Statement::If {
+                condition,
+                then_block,
+                elif_blocks,
+                else_block,
+            } => {
                 self.generate_if(condition, then_block, elif_blocks, else_block)?;
             }
             Statement::For { var, items, body } => {
                 self.generate_for(var, items, body)?;
             }
-            Statement::Foreach { var, iterable, body } => {
+            Statement::Foreach {
+                var,
+                iterable,
+                body,
+            } => {
                 self.generate_foreach(var, iterable, body)?;
             }
-            Statement::Loop { count, interval, body } => {
+            Statement::Loop {
+                count,
+                interval,
+                body,
+            } => {
                 self.generate_loop(count, interval, body)?;
             }
             Statement::Break { .. } => {
                 if let Some(end_block) = self.loop_end_block {
-                    self.builder.build_unconditional_branch(end_block).map_err(|e| e.to_string())?;
+                    self.builder
+                        .build_unconditional_branch(end_block)
+                        .map_err(|e| e.to_string())?;
                 } else {
                     return Err("break statement outside of loop".to_string());
                 }
             }
             Statement::Continue => {
                 if let Some(start_block) = self.loop_start_block {
-                    self.builder.build_unconditional_branch(start_block).map_err(|e| e.to_string())?;
+                    self.builder
+                        .build_unconditional_branch(start_block)
+                        .map_err(|e| e.to_string())?;
                 } else {
                     return Err("continue statement outside of loop".to_string());
                 }
@@ -245,14 +303,26 @@ impl<'ctx> CodeGen<'ctx> {
                     let ret_val = self.generate_expression(ret_expr)?;
                     let return_value: BasicValueEnum<'ctx> = match ret_val {
                         BasicValueEnum::IntValue(i) => i.into(),
-                        BasicValueEnum::FloatValue(f) => self.builder.build_float_to_signed_int(f, self.context.i32_type(), "ret_cast").map_err(|e| e.to_string())?.into(),
-                        BasicValueEnum::PointerValue(p) => self.builder.build_ptr_to_int(p, self.context.i32_type(), "ret_ptr_cast").map_err(|e| e.to_string())?.into(),
+                        BasicValueEnum::FloatValue(f) => self
+                            .builder
+                            .build_float_to_signed_int(f, self.context.i32_type(), "ret_cast")
+                            .map_err(|e| e.to_string())?
+                            .into(),
+                        BasicValueEnum::PointerValue(p) => self
+                            .builder
+                            .build_ptr_to_int(p, self.context.i32_type(), "ret_ptr_cast")
+                            .map_err(|e| e.to_string())?
+                            .into(),
                         _ => self.context.i32_type().const_int(0, false).into(),
                     };
-                    self.builder.build_return(Some(&return_value)).map_err(|e| e.to_string())?;
+                    self.builder
+                        .build_return(Some(&return_value))
+                        .map_err(|e| e.to_string())?;
                 } else {
                     let zero = self.context.i32_type().const_int(0, false);
-                    self.builder.build_return(Some(&zero)).map_err(|e| e.to_string())?;
+                    self.builder
+                        .build_return(Some(&zero))
+                        .map_err(|e| e.to_string())?;
                 }
                 self.needs_return = false;
             }
@@ -265,7 +335,9 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn generate_while(&mut self, condition: &Condition, body: &[Statement]) -> Result<(), String> {
         // Get the current function and append basic blocks
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or("No function to insert into")?;
 
@@ -274,19 +346,25 @@ impl<'ctx> CodeGen<'ctx> {
         let end_block = self.context.append_basic_block(current_fn, "while_end");
 
         // Branch to condition check
-        self.builder.build_unconditional_branch(cond_block).map_err(|e| e.to_string())?;
+        self.builder
+            .build_unconditional_branch(cond_block)
+            .map_err(|e| e.to_string())?;
 
         // Generate condition block
         self.builder.position_at_end(cond_block);
         let cond_val = self.generate_condition(condition)?;
-        self.builder.build_conditional_branch(cond_val, body_block, end_block).map_err(|e| e.to_string())?;
+        self.builder
+            .build_conditional_branch(cond_val, body_block, end_block)
+            .map_err(|e| e.to_string())?;
 
         // Generate body block
         self.builder.position_at_end(body_block);
         for stmt in body {
             self.generate_statement(stmt)?;
         }
-        self.builder.build_unconditional_branch(cond_block).map_err(|e| e.to_string())?;
+        self.builder
+            .build_unconditional_branch(cond_block)
+            .map_err(|e| e.to_string())?;
 
         // Set position to end block for next statements
         self.builder.position_at_end(end_block);
@@ -294,9 +372,16 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn generate_if(&mut self, condition: &Condition, then_block: &[Statement],
-                   elif_blocks: &[(Condition, Vec<Statement>)], else_block: &Option<Vec<Statement>>) -> Result<(), String> {
-        let current_fn = self.builder.get_insert_block()
+    fn generate_if(
+        &mut self,
+        condition: &Condition,
+        then_block: &[Statement],
+        elif_blocks: &[(Condition, Vec<Statement>)],
+        else_block: &Option<Vec<Statement>>,
+    ) -> Result<(), String> {
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or("No function to insert into")?;
 
@@ -315,14 +400,18 @@ impl<'ctx> CodeGen<'ctx> {
             end_bb
         };
 
-        self.builder.build_conditional_branch(cond_val, then_bb, else_bb).map_err(|e| e.to_string())?;
+        self.builder
+            .build_conditional_branch(cond_val, then_bb, else_bb)
+            .map_err(|e| e.to_string())?;
 
         // Generate then block
         self.builder.position_at_end(then_bb);
         for stmt in then_block {
             self.generate_statement(stmt)?;
         }
-        self.builder.build_unconditional_branch(end_bb).map_err(|e| e.to_string())?;
+        self.builder
+            .build_unconditional_branch(end_bb)
+            .map_err(|e| e.to_string())?;
 
         // Generate elif/else blocks
         if !elif_blocks.is_empty() {
@@ -333,21 +422,30 @@ impl<'ctx> CodeGen<'ctx> {
             for stmt in else_body {
                 self.generate_statement(stmt)?;
             }
-            self.builder.build_unconditional_branch(end_bb).map_err(|e| e.to_string())?;
+            self.builder
+                .build_unconditional_branch(end_bb)
+                .map_err(|e| e.to_string())?;
         }
 
         self.builder.position_at_end(end_bb);
         Ok(())
     }
 
-    fn generate_elif_chain(&mut self, current_fn: FunctionValue<'ctx>, end_bb: BasicBlock<'ctx>,
-                          elif_blocks: &[(Condition, Vec<Statement>)], else_block: &Option<Vec<Statement>>) -> Result<(), String> {
+    fn generate_elif_chain(
+        &mut self,
+        current_fn: FunctionValue<'ctx>,
+        end_bb: BasicBlock<'ctx>,
+        elif_blocks: &[(Condition, Vec<Statement>)],
+        else_block: &Option<Vec<Statement>>,
+    ) -> Result<(), String> {
         if elif_blocks.is_empty() {
             if let Some(else_body) = else_block {
                 for stmt in else_body {
                     self.generate_statement(stmt)?;
                 }
-                self.builder.build_unconditional_branch(end_bb).map_err(|e| e.to_string())?;
+                self.builder
+                    .build_unconditional_branch(end_bb)
+                    .map_err(|e| e.to_string())?;
             }
             return Ok(());
         }
@@ -366,14 +464,18 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Generate condition check
         let elif_cond_val = self.generate_condition(elif_cond)?;
-        self.builder.build_conditional_branch(elif_cond_val, elif_body_bb, next_block).map_err(|e| e.to_string())?;
+        self.builder
+            .build_conditional_branch(elif_cond_val, elif_body_bb, next_block)
+            .map_err(|e| e.to_string())?;
 
         // Generate elif body
         self.builder.position_at_end(elif_body_bb);
         for stmt in elif_body {
             self.generate_statement(stmt)?;
         }
-        self.builder.build_unconditional_branch(end_bb).map_err(|e| e.to_string())?;
+        self.builder
+            .build_unconditional_branch(end_bb)
+            .map_err(|e| e.to_string())?;
 
         // Recursively handle remaining elif/else blocks
         self.builder.position_at_end(next_block);
@@ -382,9 +484,16 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn generate_for(&mut self, var: &str, items: &[Expression], body: &[Statement]) -> Result<(), String> {
+    fn generate_for(
+        &mut self,
+        var: &str,
+        items: &[Expression],
+        body: &[Statement],
+    ) -> Result<(), String> {
         let int_type = self.context.i32_type();
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or("No function to insert into")?;
 
@@ -395,25 +504,41 @@ impl<'ctx> CodeGen<'ctx> {
         if items.len() == 1 {
             if let Expression::Literal(crate::control_flow::Value::Number(n)) = items[0] {
                 // Create loop counter
-                let counter = self.builder.build_alloca(int_type, var).map_err(|e| e.to_string())?;
-                self.builder.build_store(counter, int_type.const_int(0, false)).map_err(|e| e.to_string())?;
+                let counter = self
+                    .builder
+                    .build_alloca(int_type, var)
+                    .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_store(counter, int_type.const_int(0, false))
+                    .map_err(|e| e.to_string())?;
                 self.variables.insert(var.to_string(), counter);
-                self.variable_types.insert(var.to_string(), "i32".to_string());
+                self.variable_types
+                    .insert(var.to_string(), "i32".to_string());
 
-                self.builder.build_unconditional_branch(loop_block).map_err(|e| e.to_string())?;
+                self.builder
+                    .build_unconditional_branch(loop_block)
+                    .map_err(|e| e.to_string())?;
 
                 self.builder.position_at_end(loop_block);
-                let counter_val = self.builder.build_load(int_type, counter, "counter").map_err(|e| e.to_string())?;
+                let counter_val = self
+                    .builder
+                    .build_load(int_type, counter, "counter")
+                    .map_err(|e| e.to_string())?;
                 let limit = int_type.const_int(n as u64, false);
-                let cond = self.builder.build_int_compare(
-                    inkwell::IntPredicate::SLT,
-                    counter_val.into_int_value(),
-                    limit,
-                    "for_cond",
-                ).map_err(|e| e.to_string())?;
+                let cond = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::SLT,
+                        counter_val.into_int_value(),
+                        limit,
+                        "for_cond",
+                    )
+                    .map_err(|e| e.to_string())?;
 
                 let body_bb = self.context.append_basic_block(current_fn, "for_body");
-                self.builder.build_conditional_branch(cond, body_bb, end_block).map_err(|e| e.to_string())?;
+                self.builder
+                    .build_conditional_branch(cond, body_bb, end_block)
+                    .map_err(|e| e.to_string())?;
 
                 self.builder.position_at_end(body_bb);
                 for stmt in body {
@@ -421,14 +546,24 @@ impl<'ctx> CodeGen<'ctx> {
                 }
 
                 // Increment counter
-                let counter_val = self.builder.build_load(int_type, counter, "counter").map_err(|e| e.to_string())?;
-                let incremented = self.builder.build_int_add(
-                    counter_val.into_int_value(),
-                    int_type.const_int(1, false),
-                    "inc",
-                ).map_err(|e| e.to_string())?;
-                self.builder.build_store(counter, incremented).map_err(|e| e.to_string())?;
-                self.builder.build_unconditional_branch(loop_block).map_err(|e| e.to_string())?;
+                let counter_val = self
+                    .builder
+                    .build_load(int_type, counter, "counter")
+                    .map_err(|e| e.to_string())?;
+                let incremented = self
+                    .builder
+                    .build_int_add(
+                        counter_val.into_int_value(),
+                        int_type.const_int(1, false),
+                        "inc",
+                    )
+                    .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_store(counter, incremented)
+                    .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_unconditional_branch(loop_block)
+                    .map_err(|e| e.to_string())?;
             }
         }
 
@@ -436,15 +571,27 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn generate_foreach(&mut self, _var: &str, _iterable: &Expression, _body: &[Statement]) -> Result<(), String> {
+    fn generate_foreach(
+        &mut self,
+        _var: &str,
+        _iterable: &Expression,
+        _body: &[Statement],
+    ) -> Result<(), String> {
         // For now, defer foreach implementation as it requires array handling
         // TODO: Implement foreach with proper array/list iteration
         Ok(())
     }
 
-    fn generate_loop(&mut self, count: &Option<u64>, interval: &Option<u64>, body: &[Statement]) -> Result<(), String> {
+    fn generate_loop(
+        &mut self,
+        count: &Option<u64>,
+        interval: &Option<u64>,
+        body: &[Statement],
+    ) -> Result<(), String> {
         let int_type = self.context.i32_type();
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or("No function to insert into")?;
 
@@ -460,23 +607,38 @@ impl<'ctx> CodeGen<'ctx> {
 
         if let Some(loop_count) = count {
             // Loop with count
-            let counter = self.builder.build_alloca(int_type, "_loop_counter").map_err(|e| e.to_string())?;
-            self.builder.build_store(counter, int_type.const_int(0, false)).map_err(|e| e.to_string())?;
+            let counter = self
+                .builder
+                .build_alloca(int_type, "_loop_counter")
+                .map_err(|e| e.to_string())?;
+            self.builder
+                .build_store(counter, int_type.const_int(0, false))
+                .map_err(|e| e.to_string())?;
 
-            self.builder.build_unconditional_branch(loop_block).map_err(|e| e.to_string())?;
+            self.builder
+                .build_unconditional_branch(loop_block)
+                .map_err(|e| e.to_string())?;
 
             self.builder.position_at_end(loop_block);
-            let counter_val = self.builder.build_load(int_type, counter, "counter").map_err(|e| e.to_string())?;
+            let counter_val = self
+                .builder
+                .build_load(int_type, counter, "counter")
+                .map_err(|e| e.to_string())?;
             let limit = int_type.const_int(*loop_count as u64, false);
-            let cond = self.builder.build_int_compare(
-                inkwell::IntPredicate::SLT,
-                counter_val.into_int_value(),
-                limit,
-                "loop_cond",
-            ).map_err(|e| e.to_string())?;
+            let cond = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::SLT,
+                    counter_val.into_int_value(),
+                    limit,
+                    "loop_cond",
+                )
+                .map_err(|e| e.to_string())?;
 
             let body_bb = self.context.append_basic_block(current_fn, "loop_body");
-            self.builder.build_conditional_branch(cond, body_bb, end_block).map_err(|e| e.to_string())?;
+            self.builder
+                .build_conditional_branch(cond, body_bb, end_block)
+                .map_err(|e| e.to_string())?;
 
             self.builder.position_at_end(body_bb);
             for stmt in body {
@@ -484,35 +646,53 @@ impl<'ctx> CodeGen<'ctx> {
             }
 
             // Increment counter
-            let counter_val = self.builder.build_load(int_type, counter, "counter").map_err(|e| e.to_string())?;
-            let incremented = self.builder.build_int_add(
-                counter_val.into_int_value(),
-                int_type.const_int(1, false),
-                "inc",
-            ).map_err(|e| e.to_string())?;
-            self.builder.build_store(counter, incremented).map_err(|e| e.to_string())?;
-            self.builder.build_unconditional_branch(loop_block).map_err(|e| e.to_string())?;
+            let counter_val = self
+                .builder
+                .build_load(int_type, counter, "counter")
+                .map_err(|e| e.to_string())?;
+            let incremented = self
+                .builder
+                .build_int_add(
+                    counter_val.into_int_value(),
+                    int_type.const_int(1, false),
+                    "inc",
+                )
+                .map_err(|e| e.to_string())?;
+            self.builder
+                .build_store(counter, incremented)
+                .map_err(|e| e.to_string())?;
+            self.builder
+                .build_unconditional_branch(loop_block)
+                .map_err(|e| e.to_string())?;
         } else if interval.is_some() {
             // Loop with interval - similar to count but with sleep
             // For now, just do a simple loop (sleep not yet implemented)
-            self.builder.build_unconditional_branch(loop_block).map_err(|e| e.to_string())?;
+            self.builder
+                .build_unconditional_branch(loop_block)
+                .map_err(|e| e.to_string())?;
             self.builder.position_at_end(loop_block);
 
             for stmt in body {
                 self.generate_statement(stmt)?;
             }
 
-            self.builder.build_unconditional_branch(loop_block).map_err(|e| e.to_string())?;
+            self.builder
+                .build_unconditional_branch(loop_block)
+                .map_err(|e| e.to_string())?;
         } else {
             // Infinite loop
-            self.builder.build_unconditional_branch(loop_block).map_err(|e| e.to_string())?;
+            self.builder
+                .build_unconditional_branch(loop_block)
+                .map_err(|e| e.to_string())?;
             self.builder.position_at_end(loop_block);
 
             for stmt in body {
                 self.generate_statement(stmt)?;
             }
 
-            self.builder.build_unconditional_branch(loop_block).map_err(|e| e.to_string())?;
+            self.builder
+                .build_unconditional_branch(loop_block)
+                .map_err(|e| e.to_string())?;
         }
 
         self.builder.position_at_end(end_block);
@@ -542,7 +722,9 @@ impl<'ctx> CodeGen<'ctx> {
                     crate::control_flow::CompareOp::Ne => IntPredicate::NE,
                 };
 
-                self.builder.build_int_compare(predicate, left_val, right_val, "cmp").map_err(|e| e.to_string())
+                self.builder
+                    .build_int_compare(predicate, left_val, right_val, "cmp")
+                    .map_err(|e| e.to_string())
             }
             Condition::Command(expr) => {
                 let val = self.generate_expression(expr)?.into_int_value();
@@ -557,23 +739,31 @@ impl<'ctx> CodeGen<'ctx> {
             Expression::Literal(val) => {
                 use crate::control_flow::Value;
                 match val {
-                    Value::Number(n) => Ok(self.context.i32_type().const_int(*n as u64, false).into()),
+                    Value::Number(n) => {
+                        Ok(self.context.i32_type().const_int(*n as u64, false).into())
+                    }
                     Value::String(s) => {
                         // Create a global C string and then create a global alsh_str pointing at it
                         let bytes = s.as_bytes();
                         let str_val = self.context.const_string(bytes, true);
-                        let global_chars = self.module.add_global(str_val.get_type(), None, "str_chars");
+                        let global_chars =
+                            self.module
+                                .add_global(str_val.get_type(), None, "str_chars");
                         global_chars.set_initializer(&str_val);
                         // alsh_str instance as a global struct
                         let i64_type = self.context.i64_type();
                         let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
-                        let alsh_str_ty = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
+                        let alsh_str_ty = self.context.struct_type(
+                            &[i64_type.into(), i64_type.into(), i8_ptr_type.into()],
+                            false,
+                        );
                         let alsh_str_global = self.module.add_global(alsh_str_ty, None, "str_obj");
                         // Build initializer: { len, cap, ptr }
                         let len = i64_type.const_int(bytes.len() as u64, false);
                         let cap = i64_type.const_int(bytes.len() as u64, false);
                         let ptr = global_chars.as_pointer_value();
-                        let init = alsh_str_ty.const_named_struct(&[len.into(), cap.into(), ptr.into()]);
+                        let init =
+                            alsh_str_ty.const_named_struct(&[len.into(), cap.into(), ptr.into()]);
                         alsh_str_global.set_initializer(&init);
                         Ok(alsh_str_global.as_pointer_value().into())
                     }
@@ -586,15 +776,28 @@ impl<'ctx> CodeGen<'ctx> {
                     if let Some(var_type) = self.variable_types.get(name) {
                         match var_type.as_str() {
                             "pointer" => {
-                                let load = self.builder.build_load(self.context.ptr_type(AddressSpace::default()), *var, name).map_err(|e| e.to_string())?;
+                                let load = self
+                                    .builder
+                                    .build_load(
+                                        self.context.ptr_type(AddressSpace::default()),
+                                        *var,
+                                        name,
+                                    )
+                                    .map_err(|e| e.to_string())?;
                                 Ok(load)
                             }
                             "i32" => {
-                                let load = self.builder.build_load(self.context.i32_type(), *var, name).map_err(|e| e.to_string())?;
+                                let load = self
+                                    .builder
+                                    .build_load(self.context.i32_type(), *var, name)
+                                    .map_err(|e| e.to_string())?;
                                 Ok(load)
                             }
                             _ => {
-                                let load = self.builder.build_load(self.context.i64_type(), *var, name).map_err(|e| e.to_string())?;
+                                let load = self
+                                    .builder
+                                    .build_load(self.context.i64_type(), *var, name)
+                                    .map_err(|e| e.to_string())?;
                                 Ok(load)
                             }
                         }
@@ -605,20 +808,20 @@ impl<'ctx> CodeGen<'ctx> {
                     Err(format!("Undefined variable: {}", name))
                 }
             }
-            Expression::FunctionCall(name, args) => {
-                self.generate_function_call(name, args)
-            }
-            Expression::CCall(name, args) => {
-                self.generate_c_call(name, args)
-            }
-            Expression::BinaryOp(left, op, right) => {
-                self.generate_binary_op(left, op, right)
-            }
+            Expression::FunctionCall(name, args) => self.generate_function_call(name, args),
+            Expression::CCall(name, args) => self.generate_c_call(name, args),
+            Expression::StringInterpolation(parts) => self.generate_string_interpolation(parts),
+            Expression::BinaryOp(left, op, right) => self.generate_binary_op(left, op, right),
             _ => Err("Unsupported expression".to_string()),
         }
     }
 
-    fn generate_binary_op(&mut self, left: &Expression, op: &crate::control_flow::BinOp, right: &Expression) -> Result<BasicValueEnum<'ctx>, String> {
+    fn generate_binary_op(
+        &mut self,
+        left: &Expression,
+        op: &crate::control_flow::BinOp,
+        right: &Expression,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let left_val = self.generate_expression(left)?;
         let right_val = self.generate_expression(right)?;
 
@@ -634,25 +837,33 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         let result = match op {
-            crate::control_flow::BinOp::Add => {
-                self.builder.build_int_add(left_int, right_int, "add").map_err(|e| e.to_string())?
-            }
-            crate::control_flow::BinOp::Sub => {
-                self.builder.build_int_sub(left_int, right_int, "sub").map_err(|e| e.to_string())?
-            }
-            crate::control_flow::BinOp::Mul => {
-                self.builder.build_int_mul(left_int, right_int, "mul").map_err(|e| e.to_string())?
-            }
-            crate::control_flow::BinOp::Div => {
-                self.builder.build_int_signed_div(left_int, right_int, "div").map_err(|e| e.to_string())?
-            }
+            crate::control_flow::BinOp::Add => self
+                .builder
+                .build_int_add(left_int, right_int, "add")
+                .map_err(|e| e.to_string())?,
+            crate::control_flow::BinOp::Sub => self
+                .builder
+                .build_int_sub(left_int, right_int, "sub")
+                .map_err(|e| e.to_string())?,
+            crate::control_flow::BinOp::Mul => self
+                .builder
+                .build_int_mul(left_int, right_int, "mul")
+                .map_err(|e| e.to_string())?,
+            crate::control_flow::BinOp::Div => self
+                .builder
+                .build_int_signed_div(left_int, right_int, "div")
+                .map_err(|e| e.to_string())?,
             _ => return Err(format!("Unsupported binary operation: {:?}", op)),
         };
 
         Ok(result.into())
     }
 
-    fn generate_function_call(&mut self, name: &str, args: &[Expression]) -> Result<BasicValueEnum<'ctx>, String> {
+    fn generate_function_call(
+        &mut self,
+        name: &str,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         if name == "std::println" {
             // Implement std::println as printf
             let printf_fn = self.get_printf_fn();
@@ -664,30 +875,55 @@ impl<'ctx> CodeGen<'ctx> {
                         // Pointer may be a pointer to alsh_str; extract .data field
                         let i64_type = self.context.i64_type();
                         let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
-                        let alsh_str_ty = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
-                        let data_ptr = self.builder.build_struct_gep(alsh_str_ty, ptr_val, 2, "data_ptr").map_err(|e| e.to_string())?;
-                        let data = self.builder.build_load(i8_ptr_type, data_ptr, "data_load").map_err(|e| e.to_string())?;
+                        let alsh_str_ty = self.context.struct_type(
+                            &[i64_type.into(), i64_type.into(), i8_ptr_type.into()],
+                            false,
+                        );
+                        let data_ptr = self
+                            .builder
+                            .build_struct_gep(alsh_str_ty, ptr_val, 2, "data_ptr")
+                            .map_err(|e| e.to_string())?;
+                        let data = self
+                            .builder
+                            .build_load(i8_ptr_type, data_ptr, "data_load")
+                            .map_err(|e| e.to_string())?;
                         let format_str = self.context.const_string(b"%s\n", true);
-                        let global_format = self.module.add_global(format_str.get_type(), None, "format");
+                        let global_format =
+                            self.module
+                                .add_global(format_str.get_type(), None, "format");
                         global_format.set_initializer(&format_str);
-                        let format_ptr = self.builder.build_pointer_cast(
-                            global_format.as_pointer_value(),
-                            self.context.ptr_type(AddressSpace::default()),
-                            "format_ptr",
-                        ).map_err(|e| e.to_string())?;
-                        let _ = self.builder.build_call(printf_fn, &[format_ptr.into(), data.into()], "println").map_err(|e| e.to_string())?;
+                        let format_ptr = self
+                            .builder
+                            .build_pointer_cast(
+                                global_format.as_pointer_value(),
+                                self.context.ptr_type(AddressSpace::default()),
+                                "format_ptr",
+                            )
+                            .map_err(|e| e.to_string())?;
+                        let _ = self
+                            .builder
+                            .build_call(printf_fn, &[format_ptr.into(), data.into()], "println")
+                            .map_err(|e| e.to_string())?;
                     }
                     BasicValueEnum::IntValue(int_val) => {
                         // Integer argument
                         let format_str = self.context.const_string(b"%d\n", true);
-                        let global_format = self.module.add_global(format_str.get_type(), None, "format");
+                        let global_format =
+                            self.module
+                                .add_global(format_str.get_type(), None, "format");
                         global_format.set_initializer(&format_str);
-                        let format_ptr = self.builder.build_pointer_cast(
-                            global_format.as_pointer_value(),
-                            self.context.ptr_type(AddressSpace::default()),
-                            "format_ptr",
-                        ).map_err(|e| e.to_string())?;
-                        let _ = self.builder.build_call(printf_fn, &[format_ptr.into(), int_val.into()], "println").map_err(|e| e.to_string())?;
+                        let format_ptr = self
+                            .builder
+                            .build_pointer_cast(
+                                global_format.as_pointer_value(),
+                                self.context.ptr_type(AddressSpace::default()),
+                                "format_ptr",
+                            )
+                            .map_err(|e| e.to_string())?;
+                        let _ = self
+                            .builder
+                            .build_call(printf_fn, &[format_ptr.into(), int_val.into()], "println")
+                            .map_err(|e| e.to_string())?;
                     }
                     _ => return Err("std::println expects string or integer argument".to_string()),
                 }
@@ -702,42 +938,67 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    fn generate_c_call(&mut self, name: &str, args: &[Expression]) -> Result<BasicValueEnum<'ctx>, String> {
+    fn generate_c_call(
+        &mut self,
+        name: &str,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let c_fn = self.get_c_function(name)?;
         let mut arg_vals = Vec::new();
         for arg in args {
             arg_vals.push(self.generate_c_call_argument(arg)?.into());
         }
-        let _ = self.builder.build_call(c_fn, &arg_vals, &format!("c_{}", name)).map_err(|e| e.to_string())?;
+        let _ = self
+            .builder
+            .build_call(c_fn, &arg_vals, &format!("c_{}", name))
+            .map_err(|e| e.to_string())?;
         // Return a dummy value - the actual return depends on the C function
         Ok(self.context.i32_type().const_int(0, false).into())
     }
 
-    fn generate_c_call_argument(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, String> {
+    fn generate_c_call_argument(
+        &mut self,
+        expr: &Expression,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         match expr {
             Expression::Literal(crate::control_flow::Value::String(s)) => {
                 let str_val = self.context.const_string(s.as_bytes(), true);
                 let global_chars = self.module.add_global(str_val.get_type(), None, "cstr");
                 global_chars.set_initializer(&str_val);
                 let ptr_type = self.context.ptr_type(AddressSpace::default());
-                let cstr_ptr = self.builder.build_pointer_cast(
-                    global_chars.as_pointer_value(),
-                    ptr_type,
-                    "cstr_ptr",
-                ).map_err(|e| e.to_string())?;
+                let cstr_ptr = self
+                    .builder
+                    .build_pointer_cast(global_chars.as_pointer_value(), ptr_type, "cstr_ptr")
+                    .map_err(|e| e.to_string())?;
                 Ok(cstr_ptr.into())
             }
             Expression::Variable(name) => {
                 if let Some(var) = self.variables.get(name) {
                     if let Some(var_type) = self.variable_types.get(name) {
                         if var_type == "pointer" {
-                            let loaded = self.builder.build_load(self.context.ptr_type(AddressSpace::default()), *var, name).map_err(|e| e.to_string())?;
+                            let loaded = self
+                                .builder
+                                .build_load(
+                                    self.context.ptr_type(AddressSpace::default()),
+                                    *var,
+                                    name,
+                                )
+                                .map_err(|e| e.to_string())?;
                             if let BasicValueEnum::PointerValue(ptr_val) = loaded {
                                 let i64_type = self.context.i64_type();
                                 let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
-                                let alsh_str_ty = self.context.struct_type(&[i64_type.into(), i64_type.into(), i8_ptr_type.into()], false);
-                                let data_ptr = self.builder.build_struct_gep(alsh_str_ty, ptr_val, 2, "data_ptr").map_err(|e| e.to_string())?;
-                                let data = self.builder.build_load(i8_ptr_type, data_ptr, "data_load").map_err(|e| e.to_string())?;
+                                let alsh_str_ty = self.context.struct_type(
+                                    &[i64_type.into(), i64_type.into(), i8_ptr_type.into()],
+                                    false,
+                                );
+                                let data_ptr = self
+                                    .builder
+                                    .build_struct_gep(alsh_str_ty, ptr_val, 2, "data_ptr")
+                                    .map_err(|e| e.to_string())?;
+                                let data = self
+                                    .builder
+                                    .build_load(i8_ptr_type, data_ptr, "data_load")
+                                    .map_err(|e| e.to_string())?;
                                 Ok(data)
                             } else {
                                 Ok(loaded)
@@ -807,6 +1068,106 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    fn get_runtime_fn(&self, name: &str) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function(name) {
+            return f;
+        }
+        let ptr_type = self.context.ptr_type(AddressSpace::default());
+        let fn_type = match name {
+            "alsh_str_concat" => ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
+            "alsh_int_to_str" => ptr_type.fn_type(&[self.context.i64_type().into()], false),
+            "alsh_float_to_str" => ptr_type.fn_type(&[self.context.f64_type().into()], false),
+            _ => unreachable!("unknown runtime fn: {}", name),
+        };
+        self.module.add_function(name, fn_type, None)
+    }
+
+    fn generate_string_interpolation(
+        &mut self,
+        parts: &[StringPart],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let mut acc: Option<PointerValue<'ctx>> = None;
+
+        for part in parts {
+            let piece_ptr = match part {
+                StringPart::Literal(s) => {
+                    // reuse existing static-string global builder
+                    let lit_expr =
+                        Expression::Literal(crate::control_flow::Value::String(s.clone()));
+                    match self.generate_expression(&lit_expr)? {
+                        BasicValueEnum::PointerValue(p) => p,
+                        _ => return Err("expected pointer for string literal".to_string()),
+                    }
+                }
+                StringPart::Interpolation(expr) => {
+                    match expr {
+                        Expression::Variable(name) => {
+                            let var_type =
+                                self.variable_types.get(name).cloned().ok_or_else(|| {
+                                    format!("unknown type for variable: {}", name)
+                                })?;
+                            match var_type.as_str() {
+                                "i32" => {
+                                    let v = self.generate_expression(expr)?.into_int_value();
+                                    let widened = self
+                                        .builder
+                                        .build_int_z_extend(v, self.context.i64_type(), "widen")
+                                        .map_err(|e| e.to_string())?;
+                                    let f = self.get_runtime_fn("alsh_int_to_str");
+                                    let call_result = self
+                                        .builder
+                                        .build_call(f, &[widened.into()], "to_str")
+                                        .map_err(|e| e.to_string())?;
+                                    match call_result.try_as_basic_value() {
+                                        inkwell::values::ValueKind::Basic(v) => {
+                                            v.into_pointer_value()
+                                        }
+                                        inkwell::values::ValueKind::Instruction(_) => {
+                                            return Err("alsh_int_to_str returned void".to_string());
+                                        }
+                                    }
+                                }
+                                "pointer" => {
+                                    // already an alsh_str*
+                                    self.generate_expression(expr)?.into_pointer_value()
+                                }
+                                other => {
+                                    return Err(format!(
+                                        "interpolation not yet supported for type: {}",
+                                        other
+                                    ))
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err("only simple variable interpolation is supported currently"
+                                .to_string())
+                        }
+                    }
+                }
+            };
+
+            acc = Some(match acc {
+                None => piece_ptr,
+                Some(prev) => {
+                    let concat_fn = self.get_runtime_fn("alsh_str_concat");
+                    let call_result = self
+                        .builder
+                        .build_call(concat_fn, &[prev.into(), piece_ptr.into()], "concat")
+                        .map_err(|e| e.to_string())?;
+                    match call_result.try_as_basic_value() {
+                        inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
+                        inkwell::values::ValueKind::Instruction(_) => {
+                            return Err("alsh_str_concat returned void".to_string());
+                        }
+                    }
+                }
+            });
+        }
+
+        Ok(acc.ok_or("empty string interpolation")?.into())
+    }
+
     pub fn print_ir(&self) {
         println!("{}", self.module.print_to_string().to_string());
     }
@@ -822,8 +1183,8 @@ impl<'ctx> CodeGen<'ctx> {
         Target::initialize_all(&config);
 
         let triple = inkwell::targets::TargetTriple::create("x86_64-unknown-linux-gnu");
-        let target = Target::from_triple(&triple)
-            .map_err(|_| "Failed to get target".to_string())?;
+        let target =
+            Target::from_triple(&triple).map_err(|_| "Failed to get target".to_string())?;
 
         let target_machine = target
             .create_target_machine(
@@ -849,8 +1210,8 @@ impl<'ctx> CodeGen<'ctx> {
         Target::initialize_all(&config);
 
         let triple = inkwell::targets::TargetTriple::create("x86_64-unknown-linux-gnu");
-        let target = Target::from_triple(&triple)
-            .map_err(|_| "Failed to get target".to_string())?;
+        let target =
+            Target::from_triple(&triple).map_err(|_| "Failed to get target".to_string())?;
 
         let target_machine = target
             .create_target_machine(
@@ -869,4 +1230,3 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(|_| "Failed to emit object file".to_string())
     }
 }
-

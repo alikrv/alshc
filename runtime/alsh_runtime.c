@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 typedef struct alsh_str {
     int64_t len;
@@ -18,6 +19,10 @@ typedef struct Arena {
 } Arena;
 
 static Arena *current_arena = NULL;
+
+static size_t align_up(size_t n, size_t align) {
+    return (n + align - 1) & ~(align - 1);
+}
 
 void alsh_arena_push(size_t initial_cap) {
     Arena *a = (Arena*)malloc(sizeof(Arena));
@@ -38,17 +43,30 @@ void alsh_arena_pop(void) {
 
 void *alsh_arena_alloc(size_t size) {
     if (!current_arena) {
-        // fallback to malloc
         return malloc(size);
     }
-    size_t need = size;
-    if (current_arena->off + need > current_arena->cap) {
-        // not enough space, fallback to malloc for simplicity
-        return malloc(size);
+    size_t aligned_off = align_up(current_arena->off, 8);
+    if (aligned_off + size > current_arena->cap) {
+        return malloc(size); // TODO: overflow allocations currently untracked/leaked
     }
-    void *ptr = current_arena->mem + current_arena->off;
-    current_arena->off += need;
+    void *ptr = current_arena->mem + aligned_off;
+    current_arena->off = aligned_off + size;
     return ptr;
+}
+
+// Concatenation
+alsh_str *alsh_str_concat(alsh_str *a, alsh_str *b) {
+    int64_t total_len = a->len + b->len;
+    alsh_str *s = (alsh_str*)alsh_arena_alloc(sizeof(alsh_str));
+    char *buf = (char*)alsh_arena_alloc((size_t)total_len + 1);
+    if (!s || !buf) return NULL;
+    memcpy(buf, a->data, (size_t)a->len);
+    memcpy(buf + a->len, b->data, (size_t)b->len);
+    buf[total_len] = '\0';
+    s->len = total_len;
+    s->cap = total_len;
+    s->data = buf;
+    return s;
 }
 
 // Create an alsh_str that points at existing data (used for static literals)
@@ -72,3 +90,18 @@ alsh_str *alsh_make_heap_str(const char *data, int64_t len) {
     s->data = buf;
     return s;
 }
+
+
+// Numeric -> alsh_str, for interpolating $numbers
+alsh_str *alsh_int_to_str(int64_t n) {
+    char tmp[32];
+    int len = snprintf(tmp, sizeof(tmp), "%lld", (long long)n);
+    return alsh_make_heap_str(tmp, len);
+}
+
+alsh_str *alsh_float_to_str(double f) {
+    char tmp[64];
+    int len = snprintf(tmp, sizeof(tmp), "%g", f);
+    return alsh_make_heap_str(tmp, len);
+}
+

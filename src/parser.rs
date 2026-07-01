@@ -1,3 +1,4 @@
+/*
 // src/parser.rs
 use std::env;
 
@@ -212,3 +213,4 @@ fn expand_env_token(s: &str) -> String {
 
     result
 }
+*/

@@ -1,0 +1,3 @@
+[submodule "alshpp"]
+	path = alshpp
+	url = https://github.com/alikrv/alshpp

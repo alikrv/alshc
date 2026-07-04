@@ -1,0 +1,27 @@
+@stdlib
+
+function factorial(int n) int {
+    if ($n <= 1) {
+        return 1
+    }
+    let result = ($n * factorial(($n - 1)))
+    return $result
+}
+
+@main
+function main() int {
+    println("=== Testing Recursive Functions ===")
+    
+    println("Factorial calculations:")
+    
+    let f1 = factorial(3)
+    println("factorial(3) = $f1")
+    
+    let f2 = factorial(5)
+    println("factorial(5) = $f2")
+    
+    let f3 = factorial(4)
+    println("factorial(4) = $f3")
+    
+    return 0
+}

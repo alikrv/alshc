@@ -1,0 +1,17 @@
+@stdlib
+@main
+
+function main() int {
+    println("=== Testing Loops with Print ===")
+    
+    println("Counting from 1 to 5:")
+    let i = 1
+    while ($i <= 5) {
+        println("$i")
+        let i = ($i + 1)
+    }
+    
+    println("Done!")
+    
+    return 0
+}

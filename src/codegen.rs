@@ -63,16 +63,17 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn generate(&mut self, statements: &[Statement]) -> Result<(), String> {
         // First pass: collect function definitions and separate from top-level code
         let mut top_level_statements = Vec::new();
-        let mut functions_def: HashMap<String, (Vec<String>, Vec<Statement>)> = HashMap::new();
+        let mut functions_def: HashMap<String, (Vec<crate::control_flow::Parameter>, String, Vec<Statement>)> = HashMap::new();
 
         for stmt in statements {
             match stmt {
                 Statement::FunctionDef {
                     name,
                     params,
+                    return_type,
                     body,
                 } => {
-                    functions_def.insert(name.clone(), (params.clone(), body.clone()));
+                    functions_def.insert(name.clone(), (params.clone(), return_type.clone(), body.clone()));
                 }
                 _ => {
                     top_level_statements.push(stmt.clone());
@@ -81,12 +82,12 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         // Pre-pass: declare all functions so they can reference each other
-        for (name, (params, _body)) in &functions_def {
-            self.declare_function(name, params)?;
+        for (name, (params, return_type, _body)) in &functions_def {
+            self.declare_function(name, params, return_type)?;
         }
 
         // Generate function bodies
-        for (name, (params, body)) in &functions_def {
+        for (name, (params, _return_type, body)) in &functions_def {
             self.generate_function_body(name, params, body)?;
         }
 
@@ -156,7 +157,8 @@ impl<'ctx> CodeGen<'ctx> {
     fn declare_function(
         &mut self,
         name: &str,
-        params: &[String],
+        params: &[crate::control_flow::Parameter],
+        _return_type: &str,
     ) -> Result<(), String> {
         let i32_type = self.context.i32_type();
         let argv_type = self.context.ptr_type(AddressSpace::default());
@@ -174,14 +176,23 @@ impl<'ctx> CodeGen<'ctx> {
             name
         };
 
-        // Build function type based on parameters
+        // Build function type based on parameters and their types
         let fn_type = if actual_name == "main" {
             i32_type.fn_type(&[i32_type.into(), argv_type.into()], false)
         } else {
-            // All parameters default to i32
-            let param_types: Vec<_> = (0..params.len())
-                .map(|_| i32_type.into())
-                .collect();
+            // Convert parameter types to LLVM types
+            let param_types: Vec<_> = params.iter().map(|p| {
+                match p.type_name.as_str() {
+                    "i32" | "int" => i32_type.into(),
+                    "i64" | "long" => self.context.i64_type().into(),
+                    "f64" | "double" | "float" => self.context.f64_type().into(),
+                    "bool" => i32_type.into(), // bool is i1 in LLVM, but we use i32 for simplicity
+                    "str" => self.context.ptr_type(AddressSpace::default()).into(),
+                    _ => i32_type.into(), // default to i32
+                }
+            }).collect();
+
+            // For now, all functions return i32. Type system can be extended later.
             i32_type.fn_type(&param_types, false)
         };
 
@@ -193,7 +204,7 @@ impl<'ctx> CodeGen<'ctx> {
     fn generate_function_body(
         &mut self,
         name: &str,
-        params: &[String],
+        params: &[crate::control_flow::Parameter],
         body: &[Statement],
     ) -> Result<(), String> {
         let i32_type = self.context.i32_type();
@@ -214,15 +225,23 @@ impl<'ctx> CodeGen<'ctx> {
         self.needs_return = true;
 
         // Set up local variables for parameters
-        for (i, param_name) in params.iter().enumerate() {
-            if let Ok(param_val) = func.get_nth_param(i as u32).ok_or("Failed to get parameter") {
-                // Create alloca for the parameter
-                let param_alloca = self.create_entry_alloca(param_name, i32_type.into())?;
+        for (i, param) in params.iter().enumerate() {
+            if let Some(param_val) = func.get_nth_param(i as u32) {
+                // Create alloca for the parameter with proper type
+                let param_type = match param.type_name.as_str() {
+                    "i32" | "int" => i32_type.into(),
+                    "i64" | "long" => self.context.i64_type().into(),
+                    "f64" | "double" | "float" => self.context.f64_type().into(),
+                    "bool" => i32_type.into(),
+                    "str" => self.context.ptr_type(AddressSpace::default()).into(),
+                    _ => i32_type.into(),
+                };
+                let param_alloca = self.create_entry_alloca(&param.name, param_type)?;
                 self.builder
                     .build_store(param_alloca, param_val)
                     .map_err(|e| e.to_string())?;
-                self.variables.insert(param_name.clone(), param_alloca);
-                self.variable_types.insert(param_name.clone(), "i32".to_string());
+                self.variables.insert(param.name.clone(), param_alloca);
+                self.variable_types.insert(param.name.clone(), param.type_name.clone());
             }
         }
 
@@ -870,7 +889,7 @@ impl<'ctx> CodeGen<'ctx> {
                     // Load based on the variable's type
                     if let Some(var_type) = self.variable_types.get(name) {
                         match var_type.as_str() {
-                            "pointer" => {
+                            "pointer" | "str" => {
                                 let load = self
                                     .builder
                                     .build_load(
@@ -881,10 +900,24 @@ impl<'ctx> CodeGen<'ctx> {
                                     .map_err(|e| e.to_string())?;
                                 Ok(load)
                             }
-                            "i32" => {
+                            "i32" | "int" | "bool" => {
                                 let load = self
                                     .builder
                                     .build_load(self.context.i32_type(), *var, name)
+                                    .map_err(|e| e.to_string())?;
+                                Ok(load)
+                            }
+                            "i64" | "long" => {
+                                let load = self
+                                    .builder
+                                    .build_load(self.context.i64_type(), *var, name)
+                                    .map_err(|e| e.to_string())?;
+                                Ok(load)
+                            }
+                            "f64" | "float" | "double" => {
+                                let load = self
+                                    .builder
+                                    .build_load(self.context.f64_type(), *var, name)
                                     .map_err(|e| e.to_string())?;
                                 Ok(load)
                             }
@@ -920,16 +953,33 @@ impl<'ctx> CodeGen<'ctx> {
         let left_val = self.generate_expression(left)?;
         let right_val = self.generate_expression(right)?;
 
-        // Extract i64 values
-        let left_int = match left_val {
+        // Extract integer values
+        let mut left_int = match left_val {
             BasicValueEnum::IntValue(iv) => iv,
             _ => return Err("Binary operations require integer operands".to_string()),
         };
 
-        let right_int = match right_val {
+        let mut right_int = match right_val {
             BasicValueEnum::IntValue(iv) => iv,
             _ => return Err("Binary operations require integer operands".to_string()),
         };
+
+        // Handle type promotion for mismatched types
+        let left_bits = left_int.get_type().get_bit_width();
+        let right_bits = right_int.get_type().get_bit_width();
+
+        if left_bits != right_bits {
+            // Promote to larger type
+            if left_bits < right_bits {
+                left_int = self.builder
+                    .build_int_s_extend(left_int, right_int.get_type(), "ext_left")
+                    .map_err(|e| e.to_string())?;
+            } else {
+                right_int = self.builder
+                    .build_int_s_extend(right_int, left_int.get_type(), "ext_right")
+                    .map_err(|e| e.to_string())?;
+            }
+        }
 
         let result = match op {
             crate::control_flow::BinOp::Add => self
@@ -959,76 +1009,7 @@ impl<'ctx> CodeGen<'ctx> {
         name: &str,
         args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if name == "std::println" {
-            // Implement std::println as printf
-            let printf_fn = self.get_printf_fn();
-            if args.len() == 1 {
-                let arg_val = self.generate_expression(&args[0])?;
-
-                match arg_val {
-                    BasicValueEnum::PointerValue(ptr_val) => {
-                        // Pointer may be a pointer to alsh_str; extract .data field
-                        let i64_type = self.context.i64_type();
-                        let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
-                        let alsh_str_ty = self.context.struct_type(
-                            &[i64_type.into(), i64_type.into(), i8_ptr_type.into()],
-                            false,
-                        );
-                        let data_ptr = self
-                            .builder
-                            .build_struct_gep(alsh_str_ty, ptr_val, 2, "data_ptr")
-                            .map_err(|e| e.to_string())?;
-                        let data = self
-                            .builder
-                            .build_load(i8_ptr_type, data_ptr, "data_load")
-                            .map_err(|e| e.to_string())?;
-                        let format_str = self.context.const_string(b"%s\n", true);
-                        let global_format =
-                            self.module
-                                .add_global(format_str.get_type(), None, "format");
-                        global_format.set_initializer(&format_str);
-                        let format_ptr = self
-                            .builder
-                            .build_pointer_cast(
-                                global_format.as_pointer_value(),
-                                self.context.ptr_type(AddressSpace::default()),
-                                "format_ptr",
-                            )
-                            .map_err(|e| e.to_string())?;
-                        let _ = self
-                            .builder
-                            .build_call(printf_fn, &[format_ptr.into(), data.into()], "println")
-                            .map_err(|e| e.to_string())?;
-                    }
-                    BasicValueEnum::IntValue(int_val) => {
-                        // Integer argument
-                        let format_str = self.context.const_string(b"%d\n", true);
-                        let global_format =
-                            self.module
-                                .add_global(format_str.get_type(), None, "format");
-                        global_format.set_initializer(&format_str);
-                        let format_ptr = self
-                            .builder
-                            .build_pointer_cast(
-                                global_format.as_pointer_value(),
-                                self.context.ptr_type(AddressSpace::default()),
-                                "format_ptr",
-                            )
-                            .map_err(|e| e.to_string())?;
-                        let _ = self
-                            .builder
-                            .build_call(printf_fn, &[format_ptr.into(), int_val.into()], "println")
-                            .map_err(|e| e.to_string())?;
-                    }
-                    _ => return Err("std::println expects string or integer argument".to_string()),
-                }
-
-                // Return a dummy value since we don't care about the return value of printf here
-                Ok(self.context.i32_type().const_int(0, false).into())
-            } else {
-                Err("std::println expects 1 argument".to_string())
-            }
-        } else if let Some(func) = self.functions.get(name).cloned() {
+        if let Some(func) = self.functions.get(name).cloned() {
             // Call user-defined function
             let mut arg_vals = Vec::new();
             for arg in args {
@@ -1047,8 +1028,98 @@ impl<'ctx> CodeGen<'ctx> {
                     Err(format!("Function {} returned void", name))
                 }
             }
+        } else if name.starts_with("std::") {
+            // Standard library functions - call the C FFI wrappers from alsh-std
+            let c_func_name = format!("alsh_std_{}", &name[5..]); // remove "std::" prefix
+            self.generate_stdlib_call(&c_func_name, args)
         } else {
             Err(format!("Unknown function: {}", name))
+        }
+    }
+
+    fn generate_stdlib_call(
+        &mut self,
+        c_func_name: &str,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_type = self.context.ptr_type(AddressSpace::default());
+        let i32_type = self.context.i32_type();
+
+        // Define the C function signature based on name
+        let fn_type = match c_func_name {
+            "alsh_std_print" | "alsh_std_println" | "alsh_std_eprint" => {
+                // void alsh_std_print(const char *value)
+                self.context.void_type().fn_type(&[ptr_type.into()], false)
+            }
+            "alsh_std_input" => {
+                // char* alsh_std_input(const char *prompt)
+                ptr_type.fn_type(&[ptr_type.into()], false)
+            }
+            "alsh_std_exit" => {
+                // void alsh_std_exit(int code)
+                self.context.void_type().fn_type(&[i32_type.into()], false)
+            }
+            _ => {
+                return Err(format!("Unknown stdlib function: {}", c_func_name));
+            }
+        };
+
+        let c_fn = if let Some(existing) = self.module.get_function(c_func_name) {
+            existing
+        } else {
+            self.module.add_function(c_func_name, fn_type, None)
+        };
+
+        // Convert arguments to C-compatible form
+        let mut arg_vals = Vec::new();
+        for arg in args {
+            let val = self.generate_expression(arg)?;
+            // Convert to C string if needed
+            match val {
+                BasicValueEnum::PointerValue(ptr_val) => {
+                    // Check if this is an alsh_str - extract the .data field
+                    let i64_type = self.context.i64_type();
+                    let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
+                    let alsh_str_ty = self.context.struct_type(
+                        &[i64_type.into(), i64_type.into(), i8_ptr_type.into()],
+                        false,
+                    );
+
+                    // Try to extract .data field from alsh_str
+                    match self.builder.build_struct_gep(alsh_str_ty, ptr_val, 2, "data_ptr") {
+                        Ok(data_ptr_field) => {
+                            let data = self
+                                .builder
+                                .build_load(i8_ptr_type, data_ptr_field, "data_load")
+                                .map_err(|e| e.to_string())?;
+                            arg_vals.push(data.into());
+                        }
+                        Err(_) => {
+                            // Not an alsh_str, use pointer directly
+                            arg_vals.push(ptr_val.into());
+                        }
+                    }
+                }
+                BasicValueEnum::IntValue(int_val) => {
+                    arg_vals.push(int_val.into());
+                }
+                _ => {
+                    arg_vals.push(val.into());
+                }
+            }
+        }
+
+        let call_result = self
+            .builder
+            .build_call(c_fn, &arg_vals, c_func_name)
+            .map_err(|e| e.to_string())?;
+
+        match call_result.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v),
+            inkwell::values::ValueKind::Instruction(_) => {
+                // Function returned void, return dummy value
+                Ok(i32_type.const_int(0, false).into())
+            }
         }
     }
 
@@ -1221,7 +1292,7 @@ impl<'ctx> CodeGen<'ctx> {
                                     format!("unknown type for variable: {}", name)
                                 })?;
                             match var_type.as_str() {
-                                "i32" => {
+                                "i32" | "int" | "bool" => {
                                     let v = self.generate_expression(expr)?.into_int_value();
                                     let widened = self
                                         .builder
@@ -1241,7 +1312,23 @@ impl<'ctx> CodeGen<'ctx> {
                                         }
                                     }
                                 }
-                                "pointer" => {
+                                "i64" | "long" => {
+                                    let v = self.generate_expression(expr)?.into_int_value();
+                                    let f = self.get_runtime_fn("alsh_int_to_str");
+                                    let call_result = self
+                                        .builder
+                                        .build_call(f, &[v.into()], "to_str")
+                                        .map_err(|e| e.to_string())?;
+                                    match call_result.try_as_basic_value() {
+                                        inkwell::values::ValueKind::Basic(v) => {
+                                            v.into_pointer_value()
+                                        }
+                                        inkwell::values::ValueKind::Instruction(_) => {
+                                            return Err("alsh_int_to_str returned void".to_string());
+                                        }
+                                    }
+                                }
+                                "pointer" | "str" => {
                                     // already an alsh_str*
                                     self.generate_expression(expr)?.into_pointer_value()
                                 }

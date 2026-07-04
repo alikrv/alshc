@@ -2,6 +2,12 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Parameter {
+    pub name: String,
+    pub type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),
     Number(i64),
@@ -185,7 +191,8 @@ pub enum Statement {
     },
     FunctionDef {
         name: String,
-        params: Vec<String>,
+        params: Vec<Parameter>,
+        return_type: String,
         body: Vec<Statement>,
     },
     Foreach {
@@ -1033,7 +1040,12 @@ impl ControlFlowParser {
             body
         };
 
-        Ok(Some(Statement::FunctionDef { name, params, body }))
+        Ok(Some(Statement::FunctionDef {
+            name,
+            params: params.into_iter().map(|p| Parameter { name: p, type_name: "i32".to_string() }).collect(),
+            return_type: "void".to_string(),
+            body
+        }))
     }
 
     fn parse_function_header(&self, header_line: &str) -> Result<(String, Vec<String>, bool), String> {

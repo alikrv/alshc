@@ -1,0 +1,32 @@
+@stdlib
+@main
+
+function main() int {
+    println("=== Testing Type Operations ===")
+    
+    let a = 10
+    let b = 3
+    
+    println("Integer Operations:")
+    println("$a + $b = $(($a + $b))")
+    println("$a - $b = $(($a - $b))")
+    println("$a * $b = $(($a * $b))")
+    println("$a / $b = $(($a / $b))")
+    
+    println("")
+    println("Boolean Operations:")
+    let flag1 = true
+    let flag2 = false
+    
+    if ($flag1) {
+        println("flag1 is true")
+    }
+    
+    if ($flag2) {
+        println("flag2 is true")
+    } else {
+        println("flag2 is false")
+    }
+    
+    return 0
+}

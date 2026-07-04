@@ -1,0 +1,16 @@
+@stdlib
+@main
+
+function main() int {
+    let x = 42
+    let y = true
+    let msg = "interpolation"
+
+    println("=== Testing String Interpolation ===")
+    println("Integer: $x")
+    println("Boolean: $y")
+    println("String: $msg")
+    println("Calculation: $($x + 8)")
+
+    return 0
+}

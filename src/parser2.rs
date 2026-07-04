@@ -253,15 +253,20 @@ impl Parser {
         self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();
         while !self.check(&TokenKind::RParen) {
-            // supports both `name` and `type name` forms
-            let first = self.eat_ident()?;
-            if let TokenKind::Ident(second) = self.peek().clone() {
+            // Parse type name (first identifier)
+            let type_name = self.eat_ident()?;
+            // Parse parameter name (second identifier)
+            let param_name = if let TokenKind::Ident(name) = self.peek().clone() {
                 self.advance();
-                params.push(second); // `int x` -> keep param name, drop type for now
-                let _ = first;
+                name
             } else {
-                params.push(first);
-            }
+                // If only one identifier, treat it as parameter name with default type "auto"
+                type_name.clone()
+            };
+            params.push(crate::control_flow::Parameter {
+                name: param_name,
+                type_name,
+            });
             if self.check(&TokenKind::Comma) {
                 self.advance();
             } else {
@@ -270,13 +275,16 @@ impl Parser {
         }
         self.expect(TokenKind::RParen)?;
 
-        // optional return type: `int`, `str`, `noret`, etc. — consume one ident/Noret if present
+        // Parse optional return type: `int`, `str`, `noret`, etc.
+        let mut return_type = String::from("void");
         if !self.check(&TokenKind::LBrace) {
             match self.peek().clone() {
                 TokenKind::Noret => {
+                    return_type = "noret".to_string();
                     self.advance();
                 }
-                TokenKind::Ident(_) => {
+                TokenKind::Ident(ty) => {
+                    return_type = ty;
                     self.advance();
                 }
                 _ => {}
@@ -284,7 +292,7 @@ impl Parser {
         }
 
         let body = self.parse_block()?;
-        Ok(Statement::FunctionDef { name, params, body })
+        Ok(Statement::FunctionDef { name, params, return_type, body })
     }
 
     fn parse_if(&mut self) -> PResult<Statement> {

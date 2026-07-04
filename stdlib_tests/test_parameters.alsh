@@ -1,0 +1,44 @@
+@stdlib
+
+function process_int(int value) int {
+    let doubled = ($value * 2)
+    println("Input: $value, Doubled: $doubled")
+    return $doubled
+}
+
+function describe_bool(bool condition) int {
+    if ($condition) {
+        println("Condition is TRUE")
+    } else {
+        println("Condition is FALSE")
+    }
+    return 0
+}
+
+function greet_user(str username) int {
+    println("Welcome, $username!")
+    return 0
+}
+
+@main
+function main() int {
+    println("=== Testing Parameter Types ===")
+
+    println("")
+    println("Integer parameter:")
+    process_int(5)
+    process_int(25)
+
+    println("")
+    println("Boolean parameter:")
+    describe_bool(true)
+    describe_bool(false)
+
+    println("")
+    println("String parameter:")
+    greet_user("Alice")
+    greet_user("Bob")
+    greet_user("Charlie")
+
+    return 0
+}

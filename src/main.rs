@@ -345,7 +345,16 @@ fn main() {
                                 for a in &clang_args {
                                     link_cmd.arg(a);
                                 }
-                                link_cmd.arg(&ir_obj).arg(runtime_obj).arg("-o").arg(&out_file).arg("-lc");
+                                
+                                // Add standard library linking
+                                // Add search path for alsh-std library
+                                link_cmd.arg("-L").arg("alsh-std/impl/rust/target/release");
+                                // Also try linking with the preprocessor lib directory
+                                link_cmd.arg("-L").arg("alshpp");
+                                
+                                link_cmd.arg(&ir_obj).arg(runtime_obj).arg("-o").arg(&out_file)
+                                    .arg("-lalsh_std")  // Link with our Rust stdlib
+                                    .arg("-lc");        // Link with C stdlib
 
                                 let status_link = link_cmd.status();
                                 match status_link {

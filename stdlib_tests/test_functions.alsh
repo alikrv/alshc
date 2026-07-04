@@ -1,0 +1,37 @@
+@stdlib
+
+function greet(str name) int {
+    println("Hello, $name!")
+    return 0
+}
+
+function add_and_print(int a, int b) int {
+    let result = ($a + $b)
+    println("$a + $b = $result")
+    return $result
+}
+
+function print_bool(bool flag) int {
+    if ($flag) {
+        println("Flag is true")
+    } else {
+        println("Flag is false")
+    }
+    return 0
+}
+
+@main
+function main() int {
+    println("=== Testing Functions with Types ===")
+
+    greet("Alice")
+    greet("Bob")
+
+    add_and_print(5, 3)
+    add_and_print(10, 20)
+
+    print_bool(true)
+    print_bool(false)
+
+    return 0
+}

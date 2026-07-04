@@ -5,6 +5,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::OptimizationLevel;
 use inkwell::AddressSpace;
 use std::collections::HashMap;
 
@@ -26,10 +27,11 @@ pub struct CodeGen<'ctx> {
     loop_end_block: Option<BasicBlock<'ctx>>,
     loop_start_block: Option<BasicBlock<'ctx>>,
     needs_return: bool,
+    opt_level: OptimizationLevel,
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    pub fn new(context: &'ctx Context, just_run: bool) -> Self {
+    pub fn new(context: &'ctx Context, just_run: bool, opt_level: OptimizationLevel) -> Self {
         let module = context.create_module("alsh");
         let builder = context.create_builder();
 
@@ -46,6 +48,7 @@ impl<'ctx> CodeGen<'ctx> {
             loop_end_block: None,
             loop_start_block: None,
             needs_return: true,
+            opt_level,
         }
     }
 
@@ -60,16 +63,16 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn generate(&mut self, statements: &[Statement]) -> Result<(), String> {
         // First pass: collect function definitions and separate from top-level code
         let mut top_level_statements = Vec::new();
-        let mut functions_def: HashMap<String, Vec<Statement>> = HashMap::new();
+        let mut functions_def: HashMap<String, (Vec<String>, Vec<Statement>)> = HashMap::new();
 
         for stmt in statements {
             match stmt {
                 Statement::FunctionDef {
                     name,
-                    params: _,
+                    params,
                     body,
                 } => {
-                    functions_def.insert(name.clone(), body.clone());
+                    functions_def.insert(name.clone(), (params.clone(), body.clone()));
                 }
                 _ => {
                     top_level_statements.push(stmt.clone());
@@ -77,9 +80,14 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
 
-        // Generate function definitions
-        for (name, body) in &functions_def {
-            self.generate_function(name, &[], body)?;
+        // Pre-pass: declare all functions so they can reference each other
+        for (name, (params, _body)) in &functions_def {
+            self.declare_function(name, params)?;
+        }
+
+        // Generate function bodies
+        for (name, (params, body)) in &functions_def {
+            self.generate_function_body(name, params, body)?;
         }
 
         let i32_type = self.context.i32_type();
@@ -93,11 +101,20 @@ impl<'ctx> CodeGen<'ctx> {
         );
 
         if self.has_main {
-            // @main is set: the marked function is already generated as "main"
+            // @main was indicated by preprocessing. If we don't know which function
+            // was marked (no `main_function_name`), attempt to fall back to a
+            // function literally named "main". If that also doesn't exist, ignore
+            // the has_main marker and proceed (no wrapper will be generated).
             if self.main_function_name.is_none() {
-                return Err("@main directive found but no function follows it".to_string());
+                if functions_def.contains_key("main") {
+                    self.main_function_name = Some("main".to_string());
+                } else {
+                    // silently ignore missing main target from preprocessor
+                    self.has_main = false;
+                }
             }
-            // The main function is already generated, no need to create a wrapper
+            // If we still have a main_function_name, the named function is already
+            // generated and no wrapper is needed. Otherwise we continue.
         } else if self.just_run {
             // Generate main() that executes top-level code
             let main_fn_type = i32_type.fn_type(&[i32_type.into(), argv_type.into()], false);
@@ -136,19 +153,12 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn generate_function(
+    fn declare_function(
         &mut self,
         name: &str,
-        _params: &[String],
-        body: &[Statement],
+        params: &[String],
     ) -> Result<(), String> {
         let i32_type = self.context.i32_type();
-        let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
-        let i64_type = self.context.i64_type();
-        let _alsh_str_type = self.context.struct_type(
-            &[i64_type.into(), i64_type.into(), i8_ptr_type.into()],
-            false,
-        );
         let argv_type = self.context.ptr_type(AddressSpace::default());
 
         // If this function is marked with @main, name it "main"
@@ -164,13 +174,33 @@ impl<'ctx> CodeGen<'ctx> {
             name
         };
 
+        // Build function type based on parameters
         let fn_type = if actual_name == "main" {
             i32_type.fn_type(&[i32_type.into(), argv_type.into()], false)
         } else {
-            i32_type.fn_type(&[], false)
+            // All parameters default to i32
+            let param_types: Vec<_> = (0..params.len())
+                .map(|_| i32_type.into())
+                .collect();
+            i32_type.fn_type(&param_types, false)
         };
 
         let func = self.module.add_function(actual_name, fn_type, None);
+        self.functions.insert(name.to_string(), func);
+        Ok(())
+    }
+
+    fn generate_function_body(
+        &mut self,
+        name: &str,
+        params: &[String],
+        body: &[Statement],
+    ) -> Result<(), String> {
+        let i32_type = self.context.i32_type();
+
+        // Get the previously declared function
+        let func = self.functions.get(name).cloned()
+            .ok_or(format!("Function {} not found", name))?;
 
         let entry_bb = self.context.append_basic_block(func, "entry");
         self.builder.position_at_end(entry_bb);
@@ -182,6 +212,19 @@ impl<'ctx> CodeGen<'ctx> {
         self.variables.clear();
         self.variable_types.clear();
         self.needs_return = true;
+
+        // Set up local variables for parameters
+        for (i, param_name) in params.iter().enumerate() {
+            if let Ok(param_val) = func.get_nth_param(i as u32).ok_or("Failed to get parameter") {
+                // Create alloca for the parameter
+                let param_alloca = self.create_entry_alloca(param_name, i32_type.into())?;
+                self.builder
+                    .build_store(param_alloca, param_val)
+                    .map_err(|e| e.to_string())?;
+                self.variables.insert(param_name.clone(), param_alloca);
+                self.variable_types.insert(param_name.clone(), "i32".to_string());
+            }
+        }
 
         // Generate function body
         for stmt in body {
@@ -200,7 +243,6 @@ impl<'ctx> CodeGen<'ctx> {
         self.variables = saved_vars;
         self.variable_types = saved_types;
 
-        self.functions.insert(name.to_string(), func);
         Ok(())
     }
 
@@ -208,28 +250,47 @@ impl<'ctx> CodeGen<'ctx> {
         match stmt {
             Statement::Let { name, value } => {
                 let val = self.generate_expression(value)?;
-                let var = self
-                    .builder
-                    .build_alloca(val.get_type(), name)
-                    .map_err(|e| e.to_string())?;
-                self.builder
-                    .build_store(var, val)
-                    .map_err(|e| e.to_string())?;
 
-                // Track the variable type
-                let var_type = match val {
-                    BasicValueEnum::PointerValue(_) => "pointer",
-                    BasicValueEnum::IntValue(_) => "i32",
-                    BasicValueEnum::FloatValue(_) => "f64",
-                    BasicValueEnum::ArrayValue(_) => "array",
-                    BasicValueEnum::StructValue(_) => "struct",
-                    BasicValueEnum::VectorValue(_) => "vector",
-                    BasicValueEnum::ScalableVectorValue(_) => "scalable_vector",
-                };
+                // If variable already exists, store into the existing alloca instead
+                if let Some(existing) = self.variables.get(name) {
+                    self.builder
+                        .build_store(*existing, val)
+                        .map_err(|e| e.to_string())?;
 
-                self.variables.insert(name.clone(), var);
-                self.variable_types
-                    .insert(name.clone(), var_type.to_string());
+                    // Update type tracking
+                    let var_type = match val {
+                        BasicValueEnum::PointerValue(_) => "pointer",
+                        BasicValueEnum::IntValue(_) => "i32",
+                        BasicValueEnum::FloatValue(_) => "f64",
+                        BasicValueEnum::ArrayValue(_) => "array",
+                        BasicValueEnum::StructValue(_) => "struct",
+                        BasicValueEnum::VectorValue(_) => "vector",
+                        BasicValueEnum::ScalableVectorValue(_) => "scalable_vector",
+                    };
+                    self.variable_types
+                        .insert(name.clone(), var_type.to_string());
+                } else {
+                    // Allocate the variable in the function entry block for better IR
+                    let var = self.create_entry_alloca(name, val.get_type())?;
+                    self.builder
+                        .build_store(var, val)
+                        .map_err(|e| e.to_string())?;
+
+                    // Track the variable type
+                    let var_type = match val {
+                        BasicValueEnum::PointerValue(_) => "pointer",
+                        BasicValueEnum::IntValue(_) => "i32",
+                        BasicValueEnum::FloatValue(_) => "f64",
+                        BasicValueEnum::ArrayValue(_) => "array",
+                        BasicValueEnum::StructValue(_) => "struct",
+                        BasicValueEnum::VectorValue(_) => "vector",
+                        BasicValueEnum::ScalableVectorValue(_) => "scalable_vector",
+                    };
+
+                    self.variables.insert(name.clone(), var);
+                    self.variable_types
+                        .insert(name.clone(), var_type.to_string());
+                }
             }
             Statement::Command(cmd) => {
                 // For now, just print the command
@@ -582,6 +643,33 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
+    fn create_entry_alloca(&self, name: &str, ty: inkwell::types::BasicTypeEnum<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        // Find current function
+        let current_fn = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or("No function to insert into")?;
+
+        // Get entry basic block
+        let entry_bb = current_fn
+            .get_first_basic_block()
+            .ok_or("Function has no entry block")?;
+
+        // Create a temporary builder to insert at the start of entry
+        let entry_builder = self.context.create_builder();
+        if let Some(first_instr) = entry_bb.get_first_instruction() {
+            entry_builder.position_before(&first_instr);
+        } else {
+            entry_builder.position_at_end(entry_bb);
+        }
+
+        let alloca = entry_builder
+            .build_alloca(ty, name)
+            .map_err(|e| e.to_string())?;
+        Ok(alloca)
+    }
+
     fn generate_loop(
         &mut self,
         count: &Option<u64>,
@@ -728,7 +816,10 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Condition::Command(expr) => {
                 let val = self.generate_expression(expr)?.into_int_value();
-                Ok(val)
+                // Convert i32 to i1 by comparing to 0 (non-zero is true)
+                self.builder
+                    .build_int_compare(IntPredicate::NE, val, val.get_type().const_int(0, false), "cond")
+                    .map_err(|e| e.to_string())
             }
             _ => Err("Unsupported condition type".to_string()),
         }
@@ -741,6 +832,10 @@ impl<'ctx> CodeGen<'ctx> {
                 match val {
                     Value::Number(n) => {
                         Ok(self.context.i32_type().const_int(*n as u64, false).into())
+                    }
+                    Value::Bool(b) => {
+                        let val = if *b { 1u64 } else { 0u64 };
+                        Ok(self.context.i32_type().const_int(val, false).into())
                     }
                     Value::String(s) => {
                         // Create a global C string and then create a global alsh_str pointing at it
@@ -932,6 +1027,25 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(self.context.i32_type().const_int(0, false).into())
             } else {
                 Err("std::println expects 1 argument".to_string())
+            }
+        } else if let Some(func) = self.functions.get(name).cloned() {
+            // Call user-defined function
+            let mut arg_vals = Vec::new();
+            for arg in args {
+                let val = self.generate_expression(arg)?;
+                arg_vals.push(val.into());
+            }
+
+            let call_result = self
+                .builder
+                .build_call(func, &arg_vals, "call")
+                .map_err(|e| e.to_string())?;
+
+            match call_result.try_as_basic_value() {
+                inkwell::values::ValueKind::Basic(v) => Ok(v),
+                inkwell::values::ValueKind::Instruction(_) => {
+                    Err(format!("Function {} returned void", name))
+                }
             }
         } else {
             Err(format!("Unknown function: {}", name))
@@ -1191,7 +1305,7 @@ impl<'ctx> CodeGen<'ctx> {
                 &triple,
                 "generic",
                 "",
-                inkwell::OptimizationLevel::Default,
+                self.opt_level,
                 inkwell::targets::RelocMode::Default,
                 inkwell::targets::CodeModel::Default,
             )
@@ -1218,7 +1332,7 @@ impl<'ctx> CodeGen<'ctx> {
                 &triple,
                 "generic",
                 "",
-                inkwell::OptimizationLevel::Default,
+                self.opt_level,
                 inkwell::targets::RelocMode::Default,
                 inkwell::targets::CodeModel::Default,
             )

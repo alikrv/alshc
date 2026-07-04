@@ -1,0 +1,20 @@
+@stdlib
+
+function foo_func(int num, bool actually_just_return_zero) int {
+    let result = ($num * 32)
+    if ($actually_just_return_zero) {
+        return 0
+    }
+    return $result
+}
+
+@main
+function test_foo() int {
+    println("testing foo with true")
+    let result = foo_func(2, true)
+    println("$result")
+    println("testing foo with false")
+    let result2 = foo_func(2, false)
+    println("$result2")
+    return 0
+}

@@ -42,6 +42,7 @@ pub enum TokenKind {
     True,
     False,
     Noret,
+    MainFunction,
 
     // punctuation
     Dollar,
@@ -399,6 +400,7 @@ impl<'a> Lexer<'a> {
             "TRUE" => TokenKind::True,
             "FALSE" => TokenKind::False,
             "NORET" => TokenKind::Noret,
+            "MAIN_FUNCTION" => TokenKind::MainFunction,
             _ => TokenKind::Ident(text),
         }
     }

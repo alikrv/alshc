@@ -54,13 +54,7 @@ impl Value {
             Value::String(s) => s.clone(),
             Value::Number(n) => n.to_string(),
             Value::Float(f) => f.to_string(),
-            Value::Bool(b) => {
-                if *b {
-                    "true".to_string()
-                } else {
-                    "false".to_string()
-                }
-            }
+            Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
             Value::List(items) => items.join(" "),
             Value::Struct(type_name, fields) => {
                 let mut parts: Vec<String> = Vec::new();
@@ -80,8 +74,7 @@ impl Value {
             Value::Float(_) => std::mem::size_of::<f64>(),
             Value::Bool(_) => std::mem::size_of::<bool>(),
             Value::List(items) => {
-                let mut size = std::mem::size_of::<Vec<String>>()
-                    + items.len() * std::mem::size_of::<String>();
+                let mut size = std::mem::size_of::<Vec<String>>() + items.len() * std::mem::size_of::<String>();
                 for item in items {
                     size += std::mem::size_of::<String>() + item.len();
                 }
@@ -90,8 +83,7 @@ impl Value {
             Value::Struct(type_name, fields) => {
                 let mut size = std::mem::size_of::<String>() + type_name.len();
                 size += std::mem::size_of::<std::collections::HashMap<String, Value>>();
-                size +=
-                    fields.len() * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
+                size += fields.len() * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
                 for (key, value) in fields {
                     size += std::mem::size_of::<String>() + key.len();
                     size += value.size_in_memory();
@@ -260,6 +252,302 @@ pub enum CompareOp {
     Ge,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenKind {
+    At,
+    Identifier(String),
+    Number(i64),
+    Float(f64),
+    String(String),
+    Dollar,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    Comma,
+    Semicolon,
+    Colon,
+    DoubleColon,
+    Equal,
+    EqEq,
+    NotEq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    AndAnd,
+    OrOr,
+    Dot,
+    Eof,
+}
+
+#[derive(Debug, Clone)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub line: usize,
+    pub col: usize,
+}
+
+#[allow(dead_code)]
+struct Lexer<'a> {
+    input: &'a str,
+    chars: Vec<char>,
+    pos: usize,
+    line: usize,
+    col: usize,
+}
+
+impl<'a> Lexer<'a> {
+    fn new(input: &'a str) -> Self {
+        Lexer {
+            input,
+            chars: input.chars().collect(),
+            pos: 0,
+            line: 1,
+            col: 1,
+        }
+    }
+
+    fn tokenize(&mut self) -> Vec<Token> {
+        let mut tokens = Vec::new();
+
+        while let Some(ch) = self.current_char() {
+            match ch {
+                ' ' | '\t' | '\r' => {
+                    self.advance_char();
+                }
+                '\n' => {
+                    self.advance_char();
+                    self.line += 1;
+                    self.col = 1;
+                }
+                '/' => {
+                    if self.peek_char() == Some('/') {
+                        self.advance_char();
+                        self.advance_char();
+                        while let Some(c) = self.current_char() {
+                            if c == '\n' {
+                                break;
+                            }
+                            self.advance_char();
+                        }
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Slash));
+                        self.advance_char();
+                    }
+                }
+                '#' => {
+                    while let Some(c) = self.current_char() {
+                        if c == '\n' {
+                            break;
+                        }
+                        self.advance_char();
+                    }
+                }
+                '"' | '\'' => {
+                    tokens.push(self.read_string());
+                }
+                c if c.is_ascii_digit() => {
+                    tokens.push(self.read_number());
+                }
+                c if c.is_ascii_alphabetic() || c == '_' => {
+                    tokens.push(self.read_identifier());
+                }
+                '$' => {
+                    tokens.push(self.make_token(TokenKind::Dollar));
+                    self.advance_char();
+                }
+                '(' => { tokens.push(self.make_token(TokenKind::LParen)); self.advance_char(); }
+                ')' => { tokens.push(self.make_token(TokenKind::RParen)); self.advance_char(); }
+                '{' => { tokens.push(self.make_token(TokenKind::LBrace)); self.advance_char(); }
+                '}' => { tokens.push(self.make_token(TokenKind::RBrace)); self.advance_char(); }
+                ',' => { tokens.push(self.make_token(TokenKind::Comma)); self.advance_char(); }
+                ';' => { tokens.push(self.make_token(TokenKind::Semicolon)); self.advance_char(); }
+                ':' => {
+                    if self.peek_char() == Some(':') {
+                        tokens.push(self.make_token(TokenKind::DoubleColon));
+                        self.advance_char();
+                        self.advance_char();
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Colon));
+                        self.advance_char();
+                    }
+                }
+                '.' => { tokens.push(self.make_token(TokenKind::Dot)); self.advance_char(); }
+                '+' => { tokens.push(self.make_token(TokenKind::Plus)); self.advance_char(); }
+                '-' => { tokens.push(self.make_token(TokenKind::Minus)); self.advance_char(); }
+                '*' => { tokens.push(self.make_token(TokenKind::Star)); self.advance_char(); }
+                '%' => { tokens.push(self.make_token(TokenKind::Percent)); self.advance_char(); }
+                '=' => {
+                    if self.peek_char() == Some('=') {
+                        tokens.push(self.make_token(TokenKind::EqEq));
+                        self.advance_char();
+                        self.advance_char();
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Equal));
+                        self.advance_char();
+                    }
+                }
+                '!' => {
+                    if self.peek_char() == Some('=') {
+                        tokens.push(self.make_token(TokenKind::NotEq));
+                        self.advance_char();
+                        self.advance_char();
+                    } else {
+                        self.advance_char();
+                    }
+                }
+                '<' => {
+                    if self.peek_char() == Some('=') {
+                        tokens.push(self.make_token(TokenKind::Le));
+                        self.advance_char();
+                        self.advance_char();
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Lt));
+                        self.advance_char();
+                    }
+                }
+                '>' => {
+                    if self.peek_char() == Some('=') {
+                        tokens.push(self.make_token(TokenKind::Ge));
+                        self.advance_char();
+                        self.advance_char();
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Gt));
+                        self.advance_char();
+                    }
+                }
+                '&' => {
+                    if self.peek_char() == Some('&') {
+                        tokens.push(self.make_token(TokenKind::AndAnd));
+                        self.advance_char();
+                        self.advance_char();
+                    } else {
+                        self.advance_char();
+                    }
+                }
+                '|' => {
+                    if self.peek_char() == Some('|') {
+                        tokens.push(self.make_token(TokenKind::OrOr));
+                        self.advance_char();
+                        self.advance_char();
+                    } else {
+                        self.advance_char();
+                    }
+                }
+                _ => {
+                    self.advance_char();
+                }
+            }
+        }
+
+        tokens.push(Token { kind: TokenKind::Eof, line: self.line, col: self.col });
+        tokens
+    }
+
+    fn current_char(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        self.chars.get(self.pos + 1).copied()
+    }
+
+    fn advance_char(&mut self) {
+        if let Some(ch) = self.current_char() {
+            self.pos += 1;
+            self.col += 1;
+            if ch == '\n' {
+                self.line += 1;
+                self.col = 1;
+            }
+        }
+    }
+
+    fn make_token(&self, kind: TokenKind) -> Token {
+        Token { kind, line: self.line, col: self.col }
+    }
+
+    fn read_string(&mut self) -> Token {
+        let quote = self.current_char().unwrap();
+        let start_col = self.col;
+        self.advance_char();
+        let mut value = String::new();
+
+        while let Some(ch) = self.current_char() {
+            if ch == quote {
+                self.advance_char();
+                break;
+            }
+            if ch == '\\' {
+                self.advance_char();
+                if let Some(escaped) = self.current_char() {
+                    value.push(escaped);
+                    self.advance_char();
+                }
+            } else {
+                value.push(ch);
+                self.advance_char();
+            }
+        }
+
+        Token { kind: TokenKind::String(value), line: self.line, col: start_col }
+    }
+
+    fn read_number(&mut self) -> Token {
+        let start_col = self.col;
+        let mut text = String::new();
+
+        while let Some(ch) = self.current_char() {
+            if ch.is_ascii_digit() {
+                text.push(ch);
+                self.advance_char();
+            } else {
+                break;
+            }
+        }
+
+        if self.current_char() == Some('.') {
+            text.push('.');
+            self.advance_char();
+            while let Some(ch) = self.current_char() {
+                if ch.is_ascii_digit() {
+                    text.push(ch);
+                    self.advance_char();
+                } else {
+                    break;
+                }
+            }
+            let value = text.parse::<f64>().unwrap_or(0.0);
+            Token { kind: TokenKind::Float(value), line: self.line, col: start_col }
+        } else {
+            let value = text.parse::<i64>().unwrap_or(0);
+            Token { kind: TokenKind::Number(value), line: self.line, col: start_col }
+        }
+    }
+
+    fn read_identifier(&mut self) -> Token {
+        let start_col = self.col;
+        let mut text = String::new();
+
+        while let Some(ch) = self.current_char() {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                text.push(ch);
+                self.advance_char();
+            } else {
+                break;
+            }
+        }
+
+        Token { kind: TokenKind::Identifier(text), line: self.line, col: start_col }
+    }
+}
+
 pub struct ControlFlowParser {
     lines: Vec<String>,
     pos: usize,
@@ -271,50 +559,27 @@ pub struct ControlFlowParser {
 impl ControlFlowParser {
     pub fn new(input: &str) -> Self {
         let lines: Vec<String> = input.lines().map(|s| s.trim().to_string()).collect();
-        ControlFlowParser {
-            lines,
-            pos: 0,
-            has_main: false,
-            just_run: false,
-            main_function_name: None,
-        }
+        ControlFlowParser { lines, pos: 0, has_main: false, just_run: false, main_function_name: None }
     }
 
     pub fn parse(&mut self) -> Result<Vec<Statement>, String> {
         let mut statements = Vec::new();
 
-        while self.pos < self.lines.len() {
-            let line = match self.current_line() {
-                Some(l) if !l.is_empty() => l.clone(),
-                _ => {
-                    self.advance();
-                    continue;
-                }
-            };
-
-            // Check for preprocessor directives
-            if line.starts_with("@main") {
-                self.has_main = true;
+        while let Some(line) = self.peek_line() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
                 self.advance();
-                // Lookahead to get the function name
-                if let Some(next_line) = self.current_line() {
-                    let upper = next_line.to_uppercase();
-                    if upper.starts_with("FUNCTION ") {
-                        let after_fn = next_line.trim()[8..].trim();
-                        if let Some(paren_pos) = after_fn.find('(') {
-                            let func_name = after_fn[..paren_pos].trim().to_string();
-                            self.main_function_name = Some(func_name);
-                        } else {
-                            let parts: Vec<&str> = after_fn.split_whitespace().collect();
-                            if !parts.is_empty() {
-                                self.main_function_name = Some(parts[0].to_string());
-                            }
-                        }
-                    }
-                }
                 continue;
             }
-            if line.starts_with("@justrunit") {
+
+            if trimmed.starts_with("@main") {
+                self.has_main = true;
+                self.advance();
+                self.capture_main_function_name();
+                continue;
+            }
+
+            if trimmed.starts_with("@justrunit") {
                 self.just_run = true;
                 self.advance();
                 continue;
@@ -328,8 +593,29 @@ impl ControlFlowParser {
         Ok(statements)
     }
 
+    fn capture_main_function_name(&mut self) {
+        if let Some(next_line) = self.peek_line() {
+            let upper = next_line.trim().to_uppercase();
+            if upper.starts_with("FUNCTION ") {
+                let after_fn = next_line.trim()[8..].trim();
+                if let Some(paren_pos) = after_fn.find('(') {
+                    self.main_function_name = Some(after_fn[..paren_pos].trim().to_string());
+                } else {
+                    let parts: Vec<&str> = after_fn.split_whitespace().collect();
+                    if !parts.is_empty() {
+                        self.main_function_name = Some(parts[0].to_string());
+                    }
+                }
+            }
+        }
+    }
+
     fn current_line(&self) -> Option<&String> {
         self.lines.get(self.pos)
+    }
+
+    fn peek_line(&self) -> Option<&str> {
+        self.lines.get(self.pos).map(String::as_str)
     }
 
     fn advance(&mut self) {
@@ -379,18 +665,18 @@ impl ControlFlowParser {
 
         // Parenthesized expression
         if trimmed.starts_with('(') && trimmed.ends_with(')') {
-            let inner = &trimmed[1..trimmed.len() - 1];
+            let inner = &trimmed[1..trimmed.len()-1];
             // Check if it's a binary operation inside
             return self.parse_binary_op(inner);
         }
 
         // String literal
         if trimmed.starts_with('"') && trimmed.ends_with('"') {
-            let content = &trimmed[1..trimmed.len() - 1];
+            let content = &trimmed[1..trimmed.len()-1];
             return Ok(Expression::Literal(Value::String(content.to_string())));
         }
         if trimmed.starts_with('\'') && trimmed.ends_with('\'') {
-            let content = &trimmed[1..trimmed.len() - 1];
+            let content = &trimmed[1..trimmed.len()-1];
             return Ok(Expression::Literal(Value::String(content.to_string())));
         }
 
@@ -408,11 +694,7 @@ impl ControlFlowParser {
         }
 
         // Binary operations (without parentheses)
-        if trimmed.contains('+')
-            || trimmed.contains('-')
-            || trimmed.contains('*')
-            || trimmed.contains('/')
-        {
+        if trimmed.contains('+') || trimmed.contains('-') || trimmed.contains('*') || trimmed.contains('/') {
             return self.parse_binary_op(&trimmed);
         }
 
@@ -422,14 +704,11 @@ impl ControlFlowParser {
             if let Some(open_paren) = rest.find('(') {
                 if rest.ends_with(')') {
                     let func_name = rest[..open_paren].trim();
-                    let args_str = &rest[open_paren + 1..rest.len() - 1];
+                    let args_str = &rest[open_paren+1..rest.len()-1];
                     let args: Vec<Expression> = if args_str.trim().is_empty() {
                         Vec::new()
                     } else {
-                        args_str
-                            .split(',')
-                            .map(|s| self.parse_expression(s.trim()))
-                            .collect::<Result<_, _>>()?
+                        Self::split_args(args_str).into_iter().map(|s| self.parse_expression(&s)).collect::<Result<_, _>>()?
                     };
                     return Ok(Expression::CCall(func_name.to_string(), args));
                 }
@@ -442,19 +721,13 @@ impl ControlFlowParser {
             if let Some(open_paren) = rest.find('(') {
                 if rest.ends_with(')') {
                     let func_name = rest[..open_paren].trim();
-                    let args_str = &rest[open_paren + 1..rest.len() - 1];
+                    let args_str = &rest[open_paren+1..rest.len()-1];
                     let args: Vec<Expression> = if args_str.trim().is_empty() {
                         Vec::new()
                     } else {
-                        args_str
-                            .split(',')
-                            .map(|s| self.parse_expression(s.trim()))
-                            .collect::<Result<_, _>>()?
+                        Self::split_args(args_str).into_iter().map(|s| self.parse_expression(&s)).collect::<Result<_, _>>()?
                     };
-                    return Ok(Expression::FunctionCall(
-                        format!("std::{}", func_name),
-                        args,
-                    ));
+                    return Ok(Expression::FunctionCall(format!("std::{}", func_name), args));
                 }
             }
         }
@@ -464,14 +737,11 @@ impl ControlFlowParser {
             if trimmed.ends_with(')') {
                 let func_name = trimmed[..open_paren].trim();
                 if !func_name.is_empty() {
-                    let args_str = &trimmed[open_paren + 1..trimmed.len() - 1];
+                    let args_str = &trimmed[open_paren+1..trimmed.len()-1];
                     let args: Vec<Expression> = if args_str.trim().is_empty() {
                         Vec::new()
                     } else {
-                        args_str
-                            .split(',')
-                            .map(|s| self.parse_expression(s.trim()))
-                            .collect::<Result<_, _>>()?
+                        Self::split_args(args_str).into_iter().map(|s| self.parse_expression(&s)).collect::<Result<_, _>>()?
                     };
                     return Ok(Expression::FunctionCall(func_name.to_string(), args));
                 }
@@ -509,22 +779,14 @@ impl ControlFlowParser {
         if let Some(pos) = add_sub_pos {
             let op_char = trimmed.chars().nth(pos).unwrap();
             let left = self.parse_expression(trimmed[..pos].trim())?;
-            let right = self.parse_expression(trimmed[pos + 1..].trim())?;
-            let op = if op_char == '+' {
-                BinOp::Add
-            } else {
-                BinOp::Sub
-            };
+            let right = self.parse_expression(trimmed[pos+1..].trim())?;
+            let op = if op_char == '+' { BinOp::Add } else { BinOp::Sub };
             return Ok(Expression::BinaryOp(Box::new(left), op, Box::new(right)));
         } else if let Some(pos) = mul_div_pos {
             let op_char = trimmed.chars().nth(pos).unwrap();
             let left = self.parse_expression(trimmed[..pos].trim())?;
-            let right = self.parse_expression(trimmed[pos + 1..].trim())?;
-            let op = if op_char == '*' {
-                BinOp::Mul
-            } else {
-                BinOp::Div
-            };
+            let right = self.parse_expression(trimmed[pos+1..].trim())?;
+            let op = if op_char == '*' { BinOp::Mul } else { BinOp::Div };
             return Ok(Expression::BinaryOp(Box::new(left), op, Box::new(right)));
         }
 
@@ -537,11 +799,11 @@ impl ControlFlowParser {
 
         // String literal
         if trimmed.starts_with('"') && trimmed.ends_with('"') {
-            let content = &trimmed[1..trimmed.len() - 1];
+            let content = &trimmed[1..trimmed.len()-1];
             return Ok(Expression::Literal(Value::String(content.to_string())));
         }
         if trimmed.starts_with('\'') && trimmed.ends_with('\'') {
-            let content = &trimmed[1..trimmed.len() - 1];
+            let content = &trimmed[1..trimmed.len()-1];
             return Ok(Expression::Literal(Value::String(content.to_string())));
         }
 
@@ -568,11 +830,7 @@ impl ControlFlowParser {
             return Ok(None);
         }
         // Simple check: if it looks like a function call or expression
-        if trimmed.contains('(')
-            || trimmed.starts_with('$')
-            || trimmed.starts_with('"')
-            || trimmed.chars().next().unwrap().is_digit(10)
-        {
+        if trimmed.contains('(') || trimmed.starts_with('$') || trimmed.starts_with('"') || trimmed.chars().next().unwrap().is_digit(10) {
             match self.parse_expression(&trimmed) {
                 Ok(expr) => Ok(Some(expr)),
                 Err(_) => Ok(None),
@@ -582,9 +840,65 @@ impl ControlFlowParser {
         }
     }
 
+    fn split_args(args_str: &str) -> Vec<String> {
+        let mut args = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0;
+        let mut in_quote: Option<char> = None;
+        let mut escape = false;
+
+        for ch in args_str.chars() {
+            if escape {
+                current.push(ch);
+                escape = false;
+                continue;
+            }
+
+            if let Some(q) = in_quote {
+                current.push(ch);
+                if ch == '\\' {
+                    escape = true;
+                } else if ch == q {
+                    in_quote = None;
+                }
+                continue;
+            }
+
+            match ch {
+                '"' | '\'' => {
+                    in_quote = Some(ch);
+                    current.push(ch);
+                }
+                '(' => {
+                    depth += 1;
+                    current.push(ch);
+                }
+                ')' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                    current.push(ch);
+                }
+                ',' if depth == 0 => {
+                    args.push(current.trim().to_string());
+                    current.clear();
+                }
+                _ => {
+                    current.push(ch);
+                }
+            }
+        }
+
+        if !current.trim().is_empty() {
+            args.push(current.trim().to_string());
+        }
+
+        args
+    }
+
     fn parse_statement(&mut self) -> Result<Option<Statement>, String> {
-        let line = match self.current_line() {
-            Some(l) if !l.is_empty() => Self::strip_inline_comment(l),
+        let line = match self.peek_line() {
+            Some(l) if !l.trim().is_empty() => Self::strip_inline_comment(l),
             _ => {
                 self.advance();
                 return Ok(None);
@@ -592,7 +906,12 @@ impl ControlFlowParser {
         };
 
         let trimmed = line.trim();
-        let upper = line.to_uppercase();
+        if trimmed.is_empty() {
+            self.advance();
+            return Ok(None);
+        }
+
+        let upper = trimmed.to_uppercase();
 
         if trimmed.starts_with("//") || upper.starts_with("#") {
             self.advance();
@@ -680,11 +999,8 @@ impl ControlFlowParser {
         }
 
         let value = if rhs.starts_with('{') && rhs.ends_with('}') && rhs.len() > 2 {
-            let block_content = &rhs[1..rhs.len() - 1];
-            let block_lines: Vec<String> = block_content
-                .lines()
-                .map(|s| s.trim().to_string())
-                .collect();
+            let block_content = &rhs[1..rhs.len()-1];
+            let block_lines: Vec<String> = block_content.lines().map(|s| s.trim().to_string()).collect();
             let mut block_parser = ControlFlowParser::new(&block_lines.join("\n"));
             let statements = block_parser.parse()?;
             Expression::Block(statements)
@@ -697,31 +1013,45 @@ impl ControlFlowParser {
     }
 
     fn parse_function(&mut self) -> Result<Option<Statement>, String> {
-        let line = self.current_line().unwrap().clone();
+        let header_line = Self::strip_inline_comment(self.peek_line().unwrap()).trim().to_string();
         self.advance();
 
-        let trimmed = line.trim();
-        let line_upper = trimmed.to_uppercase();
-        let mut remainder = if line_upper.starts_with("FUNCTION ") {
+        let (name, params, brace_style) = self.parse_function_header(&header_line)?;
+        let body = if brace_style {
+            self.parse_block_until_matching_brace()?
+        } else {
+            let body = self.parse_block_until(&["ENDFUNCTION"])?;
+            if let Some(line) = self.peek_line() {
+                if line.trim().to_uppercase().starts_with("ENDFUNCTION") {
+                    self.advance();
+                } else {
+                    return Err("Expected ENDFUNCTION".to_string());
+                }
+            } else {
+                return Err("Expected ENDFUNCTION".to_string());
+            }
+            body
+        };
+
+        Ok(Some(Statement::FunctionDef { name, params, body }))
+    }
+
+    fn parse_function_header(&self, header_line: &str) -> Result<(String, Vec<String>, bool), String> {
+        let trimmed = header_line.trim();
+        let upper = trimmed.to_uppercase();
+        let mut remainder = if upper.starts_with("FUNCTION ") {
             trimmed[8..].trim().to_string()
         } else {
             return Err("Expected 'function' keyword".to_string());
         };
 
-        remainder = Self::strip_inline_comment(&remainder)
-            .trim_end()
-            .to_string();
-
-        let mut brace_style = false;
-        if remainder.ends_with('{') {
-            brace_style = true;
+        let brace_style = remainder.ends_with('{');
+        if brace_style {
             remainder = remainder[..remainder.len() - 1].trim_end().to_string();
         }
 
         let (name, params) = if let Some(open_paren) = remainder.find('(') {
-            let close_paren = remainder
-                .rfind(')')
-                .ok_or("Invalid function parameter list")?;
+            let close_paren = remainder.rfind(')').ok_or("Invalid function parameter list")?;
             let name = remainder[..open_paren].trim().to_string();
             let params_text = remainder[open_paren + 1..close_paren].trim();
             let param_list: Vec<String> = if params_text.is_empty() {
@@ -744,24 +1074,7 @@ impl ControlFlowParser {
             (name, params)
         };
 
-        let body = if brace_style {
-            self.parse_block_until_matching_brace()?
-        } else {
-            let body = self.parse_block_until(&["ENDFUNCTION"])?;
-            if let Some(line) = self.current_line() {
-                let upper_line = line.to_uppercase();
-                if upper_line.starts_with("ENDFUNCTION") {
-                    self.advance();
-                } else {
-                    return Err("Expected ENDFUNCTION".to_string());
-                }
-            } else {
-                return Err("Expected ENDFUNCTION".to_string());
-            }
-            body
-        };
-
-        Ok(Some(Statement::FunctionDef { name, params, body }))
+        Ok((name, params, brace_style))
     }
 
     fn parse_let(&mut self) -> Result<Option<Statement>, String> {
@@ -786,11 +1099,8 @@ impl ControlFlowParser {
         let rhs = parts[1].trim();
         let value = if rhs.starts_with('{') && rhs.ends_with('}') && rhs.len() > 2 {
             // Block expression
-            let block_content = &rhs[1..rhs.len() - 1];
-            let block_lines: Vec<String> = block_content
-                .lines()
-                .map(|s| s.trim().to_string())
-                .collect();
+            let block_content = &rhs[1..rhs.len()-1];
+            let block_lines: Vec<String> = block_content.lines().map(|s| s.trim().to_string()).collect();
             let mut block_parser = ControlFlowParser::new(&block_lines.join("\n"));
             let statements = block_parser.parse()?;
             Expression::Block(statements)
@@ -856,10 +1166,7 @@ impl ControlFlowParser {
             break;
         }
 
-        Ok(Some(Statement::StructDef {
-            name,
-            fields: variants,
-        }))
+        Ok(Some(Statement::StructDef { name, fields: variants }))
     }
 
     fn parse_enum(&mut self) -> Result<Option<Statement>, String> {
@@ -929,18 +1236,10 @@ impl ControlFlowParser {
         let enum_type: String;
 
         if remainder.to_lowercase().starts_with("of ") {
-            enum_type = remainder[3..]
-                .trim()
-                .trim_end_matches('{')
-                .trim()
-                .to_string();
+            enum_type = remainder[3..].trim().trim_end_matches('{').trim().to_string();
         } else if let Some(of_pos) = remainder.to_lowercase().find(" of ") {
             expr = Some(self.parse_expression(&remainder[..of_pos].trim())?);
-            enum_type = remainder[of_pos + 4..]
-                .trim()
-                .trim_end_matches('{')
-                .trim()
-                .to_string();
+            enum_type = remainder[of_pos + 4..].trim().trim_end_matches('{').trim().to_string();
         } else {
             return Err("SCAN syntax: SCAN [expr] OF EnumType {".to_string());
         }
@@ -999,11 +1298,7 @@ impl ControlFlowParser {
             self.advance();
         }
 
-        Ok(Some(Statement::Scan {
-            expr,
-            enum_type,
-            branches,
-        }))
+        Ok(Some(Statement::Scan { expr, enum_type, branches }))
     }
 
     fn parse_switch(&mut self) -> Result<Option<Statement>, String> {
@@ -1079,11 +1374,7 @@ impl ControlFlowParser {
             self.advance();
         }
 
-        Ok(Some(Statement::Switch {
-            expr,
-            branches,
-            default_branch,
-        }))
+        Ok(Some(Statement::Switch { expr, branches, default_branch }))
     }
 
     fn parse_foreach(&mut self) -> Result<Option<Statement>, String> {
@@ -1093,15 +1384,10 @@ impl ControlFlowParser {
         let foreach_line = line[7..].trim();
         let foreach_line = foreach_line.trim_end_matches(':').trim();
         let upper = foreach_line.to_uppercase();
-        let in_pos = upper
-            .find(" IN ")
-            .ok_or("FOREACH syntax: FOREACH var IN iterable".to_string())?;
+        let in_pos = upper.find(" IN ").ok_or("FOREACH syntax: FOREACH var IN iterable".to_string())?;
 
         let var = foreach_line[..in_pos].trim().to_string();
-        let iterable_str = foreach_line[in_pos + 4..]
-            .trim()
-            .trim_end_matches('{')
-            .trim();
+        let iterable_str = foreach_line[in_pos + 4..].trim().trim_end_matches('{').trim();
         let iterable = self.parse_expression(iterable_str)?;
 
         let body = if line.trim_end().ends_with('{') {
@@ -1112,15 +1398,11 @@ impl ControlFlowParser {
             body
         };
 
-        Ok(Some(Statement::Foreach {
-            var,
-            iterable,
-            body,
-        }))
+        Ok(Some(Statement::Foreach { var, iterable, body }))
     }
 
     fn parse_return(&mut self) -> Result<Option<Statement>, String> {
-        let line = self.current_line().unwrap().clone();
+        let line = Self::strip_inline_comment(self.current_line().unwrap()).trim().to_string();
         self.advance();
 
         let remainder = line[6..].trim();
@@ -1174,10 +1456,7 @@ impl ControlFlowParser {
             self.collect_chain_lines_until_endchain()?
         };
 
-        let steps: Vec<Expression> = steps_str
-            .into_iter()
-            .map(|s| self.parse_expression(&s))
-            .collect::<Result<_, _>>()?;
+        let steps: Vec<Expression> = steps_str.into_iter().map(|s| self.parse_expression(&s)).collect::<Result<_, _>>()?;
 
         Ok(Some(Statement::Chain { steps }))
     }
@@ -1278,7 +1557,7 @@ impl ControlFlowParser {
     }
 
     fn parse_if(&mut self) -> Result<Option<Statement>, String> {
-        let line = self.current_line().unwrap().clone();
+        let line = Self::strip_inline_comment(self.current_line().unwrap()).trim().to_string();
         self.advance();
 
         let mut cond_str = line[3..].trim();
@@ -1332,9 +1611,7 @@ impl ControlFlowParser {
                 } else if trimmed.starts_with("else") {
                     self.advance();
                     let rest = trimmed[4..].trim();
-                    if rest == "{"
-                        || (rest.is_empty() && self.current_line().map(|l| l.trim()) == Some("{"))
-                    {
+                    if rest == "{" || (rest.is_empty() && self.current_line().map(|l| l.trim()) == Some("{")) {
                         if rest.is_empty() && self.current_line().map(|l| l.trim()) == Some("{") {
                             self.advance();
                         }
@@ -1394,40 +1671,40 @@ impl ControlFlowParser {
     }
 
     fn parse_while(&mut self) -> Result<Option<Statement>, String> {
-        let line = self.current_line().unwrap().clone();
+        let header_line = Self::strip_inline_comment(self.peek_line().unwrap()).trim().to_string();
+        self.advance();
 
-        let mut cond_str = line[6..].trim();
+        let mut cond_str = header_line[6..].trim().to_string();
         let brace_style = cond_str.ends_with('{');
         if brace_style {
-            cond_str = cond_str.trim_end_matches('{').trim();
+            cond_str = cond_str.trim_end_matches('{').trim().to_string();
         }
         let cond_str = cond_str.trim_end_matches(':').trim();
 
         let condition = self.parse_condition(cond_str)?;
-        self.advance(); // Move past while line
 
         let body = if brace_style {
-            // Brace was on same line, now parse the body
             self.parse_block_until_matching_brace()?
         } else {
-            // Look for brace on next line
-            if let Some(next_line) = self.current_line() {
-                if next_line.trim() == "{" {
-                    self.advance(); // Move past the {
-                    self.parse_block_until_matching_brace()?
-                } else {
-                    return Err("Expected '{' after while condition".to_string());
-                }
-            } else {
-                return Err("Expected '{' after while condition".to_string());
-            }
+            self.require_open_block()?;
+            self.parse_block_until_matching_brace()?
         };
 
         Ok(Some(Statement::While { condition, body }))
     }
 
+    fn require_open_block(&mut self) -> Result<(), String> {
+        if let Some(line) = self.peek_line() {
+            if line.trim() == "{" {
+                self.advance();
+                return Ok(());
+            }
+        }
+        Err("Expected '{' after block header".to_string())
+    }
+
     fn parse_for(&mut self) -> Result<Option<Statement>, String> {
-        let line = self.current_line().unwrap().clone();
+        let line = Self::strip_inline_comment(self.current_line().unwrap()).trim().to_string();
         self.advance();
 
         let for_line = line[4..].trim();
@@ -1471,16 +1748,10 @@ impl ControlFlowParser {
             }))
         } else {
             let for_line = for_line.trim_end_matches('{').trim();
-            let in_pos = for_line
-                .to_uppercase()
-                .find(" IN ")
-                .ok_or("FOR syntax: FOR var IN item1 item2 ...".to_string())?;
+            let in_pos = for_line.to_uppercase().find(" IN ").ok_or("FOR syntax: FOR var IN item1 item2 ...".to_string())?;
             let var = for_line[..in_pos].trim().to_string();
             let items_text = for_line[in_pos + 4..].trim();
-            let items: Vec<Expression> = items_text
-                .split_whitespace()
-                .map(|s| self.parse_expression(s))
-                .collect::<Result<_, _>>()?;
+            let items: Vec<Expression> = items_text.split_whitespace().map(|s| self.parse_expression(s)).collect::<Result<_, _>>()?;
 
             let body = if line.trim_end().ends_with('{') {
                 self.parse_block_until_matching_brace()?
@@ -1582,34 +1853,75 @@ impl ControlFlowParser {
     fn parse_block_until_matching_brace(&mut self) -> Result<Vec<Statement>, String> {
         let mut statements = Vec::new();
 
-        while let Some(line) = self.current_line() {
+        while let Some(line) = self.current_line().cloned() {
             let trimmed = line.trim();
-
-            // Skip empty lines
-            if trimmed.is_empty() {
+            if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
                 self.advance();
                 continue;
             }
 
-            // If this line is just a closing brace, we're done
             if trimmed == "}" {
                 self.advance();
                 return Ok(statements);
             }
 
-            // If line starts with }, we're done
             if trimmed.starts_with('}') {
+                let remainder = trimmed[1..].trim();
                 self.advance();
+                if !remainder.is_empty() {
+                    self.lines.insert(self.pos, remainder.to_string());
+                }
                 return Ok(statements);
             }
 
-            // Parse the statement
             if let Some(stmt) = self.parse_statement()? {
                 statements.push(stmt);
             }
         }
 
         Err("Expected matching }".to_string())
+    }
+
+    fn brace_depth_delta(line: &str) -> i32 {
+        let mut depth = 0;
+        let mut in_quote: Option<char> = None;
+        let mut escape = false;
+        let mut chars = line.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if escape {
+                escape = false;
+                continue;
+            }
+
+            if let Some(q) = in_quote {
+                if ch == '\\' {
+                    escape = true;
+                } else if ch == q {
+                    in_quote = None;
+                }
+                continue;
+            }
+
+            match ch {
+                '"' | '\'' => {
+                    in_quote = Some(ch);
+                }
+                '/' => {
+                    if let Some('/') = chars.peek() {
+                        break;
+                    }
+                }
+                '#' => {
+                    break;
+                }
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+        }
+
+        depth
     }
 
     fn parse_condition(&mut self, cond_str: &str) -> Result<Condition, String> {
@@ -1674,8 +1986,7 @@ impl ControlFlowParser {
             }
         }
 
-        if let Some(and_pos) = find_top_level(cond, " AND ").or_else(|| find_top_level(cond, "&&"))
-        {
+        if let Some(and_pos) = find_top_level(cond, " AND ").or_else(|| find_top_level(cond, "&&")) {
             let left = self.parse_condition(&cond[..and_pos])?;
             let right = if cond[and_pos..].starts_with("&&") {
                 self.parse_condition(&cond[and_pos + 2..])?
@@ -1741,6 +2052,21 @@ mod tests {
                 other => panic!("expected numeric return, got {:?}", other),
             },
             other => panic!("expected return statement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_test_while_simple() {
+        let source = std::fs::read_to_string("test_while_simple.alsh").expect("read test file");
+        let mut parser = ControlFlowParser::new(&source);
+        match parser.parse() {
+            Ok(statements) => {
+                println!("parsed {} statements", statements.len());
+                for stmt in statements {
+                    println!("stmt: {:?}", stmt);
+                }
+            }
+            Err(e) => panic!("parse error: {}", e),
         }
     }
 }
@@ -1851,9 +2177,7 @@ impl Environment {
                             }
                             result.push_str(&format!("{} {{ {} }}", type_name, parts.join(" ")));
                         }
-                        Value::Enum(type_name, variant) => {
-                            result.push_str(&format!("{}.{}", type_name, variant))
-                        }
+                        Value::Enum(type_name, variant) => result.push_str(&format!("{}.{}", type_name, variant)),
                     }
                 } else {
                     result.push('$');

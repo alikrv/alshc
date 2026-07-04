@@ -7,6 +7,3 @@ function test_loop() int {
     }
     return 0
 }
-
-// this isnt parsed correctly
-// says that there's a missing '}', but where? <- that's another thing compiler error messages should be more helpful

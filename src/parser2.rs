@@ -116,26 +116,9 @@ impl Parser {
     }
 
     fn handle_directive(&mut self, raw: &str) -> PResult<()> {
-        let mut parts = raw.trim_start_matches('@').splitn(2, char::is_whitespace);
-        let name = parts.next().unwrap_or("");
-        match name {
-            "main" => {
-                self.has_main = true;
-                // lookahead: next statement should be a function def; capture its name
-                if let TokenKind::Function = self.peek() {
-                    if let Some(fname) = self.peek_function_name() {
-                        self.main_function_name = Some(fname);
-                    }
-                }
-            }
-            "justrunit" => self.just_run = true,
-            "noffi" => self.noffi = true,
-            "stdlib" => self.use_stdlib = true,
-            // "include" / "import" / "define" / "justcarryon" handled by a
-            // separate preprocessor pass before lexing, if you want raw text
-            // splicing; left as no-ops here since they don't affect AST shape.
-            _ => {}
-        }
+        // Preprocessor directives are handled by the external preprocessor.
+        // The compiler should not act on them. Ignore any directive tokens.
+        let _ = raw;
         Ok(())
     }
 
@@ -155,6 +138,11 @@ impl Parser {
                 self.advance();
                 self.handle_directive(&d)?;
                 self.parse_statement()
+            }
+            TokenKind::MainFunction => {
+                // preprocessor marks main functions using MAIN_FUNCTION
+                // let parse_function handle consuming the token and marking has_main
+                self.parse_function()
             }
             TokenKind::Let => self.parse_let(),
             TokenKind::Function => self.parse_function(),
@@ -251,8 +239,17 @@ impl Parser {
     }
 
     fn parse_function(&mut self) -> PResult<Statement> {
-        self.expect(TokenKind::Function)?;
+        // Accept either FUNCTION or MAIN_FUNCTION (preprocessor may emit MAIN_FUNCTION)
+        let mut marked_main = false;
+        match self.peek().clone() {
+            TokenKind::Function => { self.advance(); }
+            TokenKind::MainFunction => { self.advance(); self.has_main = true; marked_main = true; }
+            _ => return Err(self.err("expected function declaration")),
+        }
         let name = self.eat_ident()?;
+        if marked_main {
+            self.main_function_name = Some(name.clone());
+        }
         self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();
         while !self.check(&TokenKind::RParen) {

@@ -1044,6 +1044,7 @@ impl<'ctx> CodeGen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let ptr_type = self.context.ptr_type(AddressSpace::default());
         let i32_type = self.context.i32_type();
+        let i64_type = self.context.i64_type();
 
         // Define the C function signature based on name
         let fn_type = match c_func_name {
@@ -1058,6 +1059,48 @@ impl<'ctx> CodeGen<'ctx> {
             "alsh_std_exit" => {
                 // void alsh_std_exit(int code)
                 self.context.void_type().fn_type(&[i32_type.into()], false)
+            }
+            // File I/O functions
+            "alsh_std_env" => {
+                // char* alsh_std_env(const char *key)
+                ptr_type.fn_type(&[ptr_type.into()], false)
+            }
+            "alsh_std_readfile" => {
+                // char* alsh_std_readfile(const char *path)
+                ptr_type.fn_type(&[ptr_type.into()], false)
+            }
+            "alsh_std_writefile" | "alsh_std_appendfile" => {
+                // int alsh_std_writefile(const char *path, const char *contents)
+                i32_type.fn_type(&[ptr_type.into(), ptr_type.into()], false)
+            }
+            "alsh_std_exists" => {
+                // int alsh_std_exists(const char *path)
+                i32_type.fn_type(&[ptr_type.into()], false)
+            }
+            // String utilities
+            "alsh_std_strlen" => {
+                // usize alsh_std_strlen(const char *s)
+                i64_type.fn_type(&[ptr_type.into()], false)
+            }
+            "alsh_std_upper" | "alsh_std_lower" | "alsh_std_trim" => {
+                // char* alsh_std_upper(const char *s)
+                ptr_type.fn_type(&[ptr_type.into()], false)
+            }
+            "alsh_std_contains" | "alsh_std_startswith" | "alsh_std_endswith" => {
+                // int alsh_std_contains(const char *s, const char *sub)
+                i32_type.fn_type(&[ptr_type.into(), ptr_type.into()], false)
+            }
+            "alsh_std_replace" => {
+                // char* alsh_std_replace(const char *s, const char *from, const char *to)
+                ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), ptr_type.into()], false)
+            }
+            "alsh_std_repeat" => {
+                // char* alsh_std_repeat(const char *s, i32 n)
+                ptr_type.fn_type(&[ptr_type.into(), i32_type.into()], false)
+            }
+            "alsh_std_strip" => {
+                // char* alsh_std_strip(const char *s, const char *chars)
+                ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false)
             }
             _ => {
                 return Err(format!("Unknown stdlib function: {}", c_func_name));
@@ -1114,11 +1157,70 @@ impl<'ctx> CodeGen<'ctx> {
             .build_call(c_fn, &arg_vals, c_func_name)
             .map_err(|e| e.to_string())?;
 
-        match call_result.try_as_basic_value() {
-            inkwell::values::ValueKind::Basic(v) => Ok(v),
-            inkwell::values::ValueKind::Instruction(_) => {
-                // Function returned void, return dummy value
-                Ok(i32_type.const_int(0, false).into())
+        // Some stdlib functions return `char *` (C string). Convert those to
+        // `alsh_str *` using runtime `alsh_make_heap_str` so downstream code
+        // (string interpolation and concatenation) can treat them uniformly.
+        let c_string_returns = [
+            "alsh_std_upper",
+            "alsh_std_lower",
+            "alsh_std_trim",
+            "alsh_std_replace",
+            "alsh_std_repeat",
+            "alsh_std_strip",
+            "alsh_std_readfile",
+            "alsh_std_env",
+            "alsh_std_input",
+        ];
+
+        if c_string_returns.contains(&c_func_name) {
+            // Expect a pointer result
+            match call_result.try_as_basic_value() {
+                inkwell::values::ValueKind::Basic(bv) => {
+                    let c_ptr = bv.into_pointer_value();
+
+                    // call strlen(c_ptr)
+                    let strlen_fn = self.get_c_function("strlen")?;
+                    let strlen_call = self
+                        .builder
+                        .build_call(strlen_fn, &[c_ptr.into()], "strlen")
+                        .map_err(|e| e.to_string())?;
+                    let len = match strlen_call.try_as_basic_value() {
+                        inkwell::values::ValueKind::Basic(lv) => lv.into_int_value(),
+                        _ => {
+                            return Err("strlen returned non-integer".to_string());
+                        }
+                    };
+
+                    // call runtime alsh_make_heap_str(c_ptr, len)
+                    let mk_fn = self.get_runtime_fn("alsh_make_heap_str");
+                    let mk_call = self
+                        .builder
+                        .build_call(mk_fn, &[c_ptr.into(), len.into()], "mk_str")
+                        .map_err(|e| e.to_string())?;
+                    let result_ptr = match mk_call.try_as_basic_value() {
+                        inkwell::values::ValueKind::Basic(rv) => rv,
+                        _ => return Err("alsh_make_heap_str returned void".to_string()),
+                    };
+
+                    // free the original C string returned by the stdlib (Rust side allocated)
+                    if let Ok(free_fn) = self.get_c_function("alsh_std_free_string") {
+                        let _ = self
+                            .builder
+                            .build_call(free_fn, &[c_ptr.into()], "free_cstr")
+                            .map_err(|e| e.to_string())?;
+                    }
+
+                    Ok(result_ptr)
+                }
+                _ => Err("expected pointer return from stdlib C function".to_string()),
+            }
+        } else {
+            match call_result.try_as_basic_value() {
+                inkwell::values::ValueKind::Basic(v) => Ok(v),
+                inkwell::values::ValueKind::Instruction(_) => {
+                    // Function returned void, return dummy value
+                    Ok(i32_type.const_int(0, false).into())
+                }
             }
         }
     }
@@ -1243,6 +1345,11 @@ impl<'ctx> CodeGen<'ctx> {
                     let ptr_type = self.context.ptr_type(AddressSpace::default());
                     self.context.void_type().fn_type(&[ptr_type.into()], false)
                 }
+                "alsh_std_free_string" => {
+                    // void alsh_std_free_string(char *ptr)
+                    let ptr_type = self.context.ptr_type(AddressSpace::default());
+                    self.context.void_type().fn_type(&[ptr_type.into()], false)
+                }
                 _ => {
                     // For unknown functions, assume they take no args and return i32
                     // This is a fallback - ideally we'd have better type info
@@ -1262,6 +1369,7 @@ impl<'ctx> CodeGen<'ctx> {
             "alsh_str_concat" => ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
             "alsh_int_to_str" => ptr_type.fn_type(&[self.context.i64_type().into()], false),
             "alsh_float_to_str" => ptr_type.fn_type(&[self.context.f64_type().into()], false),
+            "alsh_make_heap_str" => ptr_type.fn_type(&[ptr_type.into(), self.context.i64_type().into()], false),
             _ => unreachable!("unknown runtime fn: {}", name),
         };
         self.module.add_function(name, fn_type, None)

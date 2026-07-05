@@ -26,3 +26,5 @@ examples/a.out
 tests/a.out
 test/a.out
 stdlib_tests/a.out
+
+otherfiles/*

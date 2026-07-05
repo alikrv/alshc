@@ -19,6 +19,13 @@ typedef struct Arena {
 } Arena;
 
 static Arena *current_arena = NULL;
+// Track fallback malloc'd blocks for allocations that couldn't fit in arenas
+typedef struct FallbackAlloc {
+    void *ptr;
+    struct FallbackAlloc *next;
+} FallbackAlloc;
+
+static FallbackAlloc *fallback_head = NULL;
 
 static size_t align_up(size_t n, size_t align) {
     return (n + align - 1) & ~(align - 1);
@@ -41,13 +48,59 @@ void alsh_arena_pop(void) {
     current_arena = prev;
 }
 
+void alsh_arena_free_all(void) {
+    while (current_arena) {
+        Arena *prev = current_arena->prev;
+        free(current_arena->mem);
+        free(current_arena);
+        current_arena = prev;
+    }
+    // free any fallback malloc'd blocks
+    FallbackAlloc *f = fallback_head;
+    while (f) {
+        FallbackAlloc *n = f->next;
+        free(f->ptr);
+        free(f);
+        f = n;
+    }
+    fallback_head = NULL;
+}
+
+// Register cleanup at process exit to free any remaining arenas allocated
+static void alsh_runtime_register_cleanup(void) __attribute__((constructor));
+static void alsh_runtime_register_cleanup(void) {
+    /* Ensure there is at least one arena so small allocations
+       use arena memory (and are freed at exit) instead of falling
+       back to malloc which would not be tracked here. */
+    alsh_arena_push(0);
+    atexit(alsh_arena_free_all);
+}
+
 void *alsh_arena_alloc(size_t size) {
     if (!current_arena) {
-        return malloc(size);
+        void *p = malloc(size);
+        if (p) {
+            FallbackAlloc *fa = (FallbackAlloc*)malloc(sizeof(FallbackAlloc));
+            if (fa) {
+                fa->ptr = p;
+                fa->next = fallback_head;
+                fallback_head = fa;
+            }
+        }
+        return p;
     }
     size_t aligned_off = align_up(current_arena->off, 8);
     if (aligned_off + size > current_arena->cap) {
-        return malloc(size); // TODO: overflow allocations currently untracked/leaked
+        void *p = malloc(size); // overflow allocations tracked so they can be freed
+        if (p) {
+            FallbackAlloc *fa = (FallbackAlloc*)malloc(sizeof(FallbackAlloc));
+            if (fa) {
+                fa->ptr = p;
+                fa->next = fallback_head;
+                fallback_head = fa;
+            }
+        }
+        return p;
     }
     void *ptr = current_arena->mem + aligned_off;
     current_arena->off = aligned_off + size;

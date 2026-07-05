@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub struct Parameter {
     pub name: String,
     pub type_name: String,
+    pub is_variadic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1042,7 +1043,7 @@ impl ControlFlowParser {
 
         Ok(Some(Statement::FunctionDef {
             name,
-            params: params.into_iter().map(|p| Parameter { name: p, type_name: "i32".to_string() }).collect(),
+            params: params.into_iter().map(|p| Parameter { name: p, type_name: "i32".to_string(), is_variadic: false }).collect(),
             return_type: "void".to_string(),
             body
         }))

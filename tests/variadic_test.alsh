@@ -1,0 +1,15 @@
+function sum(int ... nums) int {
+    let total = 0
+    let i = 0
+    while ($i < nums_len) {
+        let total = ($total + alsh_varargs_get_i32(nums, $i))
+        let i = ($i + 1)
+    }
+    return $total
+}
+
+function main() int {
+    let result = sum(1, 2, 3, 4, 5)
+    let s = alsh_int_to_str($result)
+    std::println($s)
+}

@@ -1,0 +1,7 @@
+@main
+function test_varargs() int {
+    let contains1 = std::contains("hello world", "world")
+    let contains2 = std::contains("hello world", "xyz")
+    std::println("Contains 'world': $contains1")
+    std::println("Contains 'xyz': $contains2")
+}

@@ -255,6 +255,12 @@ impl Parser {
         while !self.check(&TokenKind::RParen) {
             // Parse type name (first identifier)
             let type_name = self.eat_ident()?;
+            // Check for variadic marker '...'
+            let mut is_variadic = false;
+            if self.check(&TokenKind::Ellipsis) {
+                self.advance();
+                is_variadic = true;
+            }
             // Parse parameter name (second identifier)
             let param_name = if let TokenKind::Ident(name) = self.peek().clone() {
                 self.advance();
@@ -266,6 +272,7 @@ impl Parser {
             params.push(crate::control_flow::Parameter {
                 name: param_name,
                 type_name,
+                is_variadic,
             });
             if self.check(&TokenKind::Comma) {
                 self.advance();

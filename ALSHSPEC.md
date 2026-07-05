@@ -1,7 +1,5 @@
 #  ALSH Language Specification
 
-_COMPILER_SPEC
-
 ## Overview
 
 This version of ALSH spec is a **strictly compiled language** targeting native code generation via LLVM. (Different to the much more vibe-based interpreted version)
@@ -65,7 +63,6 @@ Example:
 - `// comment`
 - `#!` only valid on first line (shebang)
 
-
 ## 2. Preprocessor
 
 Preprocessing happens before parsing.
@@ -76,13 +73,17 @@ Preprocessing happens before parsing.
 - No scope
 - No evaluation
 
-### 2.2 `@include`
+### 2.2 `@undefine`
+@undefine NAME
+- Purely to revert the effect of a previous @define, if applicable.
+
+### 2.3 `@include`
 `@include "file.alsh`
 - Raw text inclusion
 - No isolation
 - Order matters
 
-### 2.3 @import
+### 2.4 @import
 `@import "file.alsh"`
 - Loads file as a module
 - Makes available:
@@ -91,7 +92,7 @@ Preprocessing happens before parsing.
 - Does NOT paste text
 - Avoids duplication
 
-### 2.4 Entry point
+### 2.5 Entry point
 `@main`
 
 Marks a function as entry point:
@@ -99,26 +100,25 @@ Marks a function as entry point:
 @main
 function start() { ... }
 ```
-
+### 2.6 Top-level code
 `@justrunit`
 
 Allows top-level execution:
-
 `@justrunit`
 
-### 2.5 `@justcarryon`
+### 2.7 `@justcarryon`
 `@justcarryon`
 
 When this directive is present, runtime errors during command execution or function calls
 are reported but do not abort script execution. The script continues with the next statement.
 
-### 2.6 `@noffi`
+### 2.8`@noffi`
 `@noffi`
 
 When this directive is present, any `c::` function call in the current file is disabled.
 The call is removed during preprocessing so the C function is never invoked.
 
-### 2.7 @stdlib
+### 2.9 @stdlib`
 `@stdlib`
 
 Enables the ALSH standard library shorthand names in the current script.
@@ -258,6 +258,47 @@ let val = *ptr
 ### 4.6 Type Inference
 
 Variables declared with `let` have their types inferred from the assigned expression. The compiler determines the type automatically based on the literal or return value of the expression.
+
+### 4.7 Polymorphic Type: `anytype`
+
+The `anytype` pseudo-type allows a function parameter to accept a value of any type. It is a compile-time construct and can **only be used in function parameters**.
+
+**Restrictions:**
+- `anytype` cannot be used as a variable type
+- `anytype` cannot be used as a function return type
+- `anytype` cannot be used as a field type in structs or arrays
+- `anytype` is **strictly** for function parameters only
+
+**Usage in Function Parameters:**
+
+```
+function process(anytype value) str {
+    let type_name = std::typeof($value)
+    return "Received type: $type_name"
+}
+```
+
+**Semantics:**
+
+- When a function parameter is declared as `anytype`, the parameter accepts a value of any valid ALSH type
+- The actual type is determined at the call site
+- Inside the function body, the parameter is treated as having its runtime type
+- The compiler performs type erasure at the ALSH level; at the LLVM level, anytype values are passed as tagged unions or generic pointers with type metadata
+- To determine the actual type of an `anytype` parameter at runtime, use `std::typeof()`
+
+**Example:**
+
+```
+function print_value(anytype val) noret {
+    let t = std::typeof($val)
+    echo ("Value of type " + $t + ": " + $val)
+}
+
+print_value(42)           // int
+print_value("hello")      // str
+print_value(3.14)         // float
+```
+
 ## 5. Expressions
 ### 5.1 Arithmetic
 `( expression )`
@@ -455,6 +496,116 @@ function modify(int* ptr) noret {
     *ptr = 42
 }
 ```
+
+### 8.4 Variadic Functions
+
+Variadic functions accept a variable number of arguments of a single type, specified using the `...` notation.
+
+**Syntax:**
+```
+function name(type param1, type param2, type... args) returntype {
+    ...
+}
+```
+
+**Rules:**
+- The `...` notation must follow a type and denotes "zero or more arguments of this type"
+- All variadic arguments must have the same type
+- Variadic parameters must appear last in the parameter list
+- A function may have at most one variadic parameter
+- Required parameters may precede the variadic parameter
+
+**Calling Variadic Functions:**
+
+Variadic functions are called with any number of arguments matching the variadic type:
+
+```
+function sum(int... numbers) int {
+    let total = 0
+    foreach num in numbers {
+        let total = ($total + $num)
+    }
+    return $total
+}
+
+// Call with 0 arguments
+let result1 = sum()
+
+// Call with multiple arguments
+let result2 = sum(1, 2, 3, 4, 5)
+let result3 = sum(10, 20)
+```
+
+**Variadic Parameter Access:**
+
+Inside the function body, the variadic parameter is accessible as an array:
+
+```
+function print_strings(str msg, str... items) noret {
+    echo $msg
+    foreach item in items {
+        echo ("  - " + $item)
+    }
+}
+
+print_strings("Options:", "apple", "banana", "cherry")
+```
+
+**Compiler Semantics:**
+
+- Variadic arguments are automatically packed into an array at the call site
+- The array type is inferred from the variadic type (e.g., `str...` becomes `[str]`)
+- Empty variadic argument lists result in an empty array
+- At the LLVM level, variadic functions are lowered to array parameters with explicit length passing
+
+**Restrictions:**
+
+- Variadic parameters cannot be pointers: `int*...` is not allowed (use `int*[] instead)
+- Variadic parameters cannot be function types
+- Return types cannot be variadic: the function returns a single value of the declared type
+
+### 8.5 Polymorphic Functions
+
+Functions can accept parameters of any type using the `anytype` pseudo-type. This enables writing generic functions that operate on values regardless of their concrete type.
+
+**Syntax:**
+```
+function name(anytype param) returntype {
+    ...
+}
+```
+
+**Rules:**
+- At most one `anytype` parameter per function (to avoid ambiguity)
+- `anytype` parameters can be mixed with typed parameters
+- Inside the function body, use `std::typeof()` to determine the actual type at runtime
+- The function body must handle any type appropriately
+
+**Type Dispatch:**
+```
+function describe(anytype x) str {
+    let type_name = std::typeof($x)
+
+    if ($type_name == "int") {
+        return "An integer: $x"
+    } elif ($type_name == "str") {
+        return "A string: $x"
+    } elif ($type_name == "float") {
+        return "A float: $x"
+    } else {
+        return "Unknown type: $type_name"
+    }
+}
+
+echo describe(123)
+echo describe("hello")
+echo describe(3.14)
+```
+
+**Compiler Implementation:**
+- At the LLVM level, anytype values are lowered to tagged unions with runtime type information
+- Each value carries a type discriminant that is checked by `std::typeof()`
+- The compiler generates optimized code paths for type checking
 
 ## 9. Error Handling
 ### 9.1 Try/Catch
@@ -662,3 +813,54 @@ Aside from the shell builtins of alsh itself:
 
 - Standard library functions are always available under `std::`, for example `std::print(...)`, `std::trim(...)`, `std::readfile(...)`, and `std::exists(...)`.
 - Add `@stdlib` to a script to use these functions without the `std::` prefix.
+
+## Stdlib: Type Reflection
+
+### `std::typeof(value)`
+
+**Signature:**
+```
+function std::typeof(anytype value) str
+```
+
+**Purpose:**
+Returns the type name of the given value as a string. This function enables runtime type introspection and is essential for working with `anytype` parameters.
+
+**Returns:**
+A string representing the type of the argument. Possible return values:
+
+- `"int"` - signed integer
+- `"float"` - single-precision floating point
+- `"double"` - double-precision floating point
+- `"char"` - single character
+- `"str"` - string
+- `"bool"` - boolean value
+- `"array"` - array type (for typed arrays, see notes)
+- `"struct:<name>"` - struct type (e.g., `"struct:person"`)
+- `"enum:<name>"` - enum type (e.g., `"enum:bread_id"`)
+- `"pointer:<type>"` - pointer type (e.g., `"pointer:int"`)
+
+**Examples:**
+```
+std::typeof(42)              // returns "int"
+std::typeof(3.14)            // returns "float"
+std::typeof("hello")         // returns "str"
+std::typeof(true)            // returns "bool"
+std::typeof([1, 2, 3])       // returns "array"
+
+let p = person { age: 30 name: "Alice" height: 1.70 }
+std::typeof($p)              // returns "struct:person"
+
+let favorite = bread_id.brioche
+std::typeof($favorite)       // returns "enum:bread_id"
+
+let x = 10
+let ptr = &x
+std::typeof($ptr)            // returns "pointer:int"
+```
+
+**Compiler Semantics:**
+- `std::typeof()` is a built-in function compiled directly to type-checking code
+- No runtime overhead beyond the intrinsic cost of type discrimination
+- Works with all ALSH types, including user-defined structs and enums
+- Returns type information accurate to the value's actual runtime type

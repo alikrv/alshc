@@ -158,3 +158,60 @@ alsh_str *alsh_float_to_str(double f) {
     return alsh_make_heap_str(tmp, len);
 }
 
+// Varargs array helpers (allocate and store) for supported element types
+void *alsh_make_varargs_array_i32(size_t count) {
+    return alsh_arena_alloc(sizeof(int32_t) * count);
+}
+
+void alsh_varargs_store_i32(void *base, size_t idx, int32_t v) {
+    int32_t *arr = (int32_t*)base;
+    arr[idx] = v;
+}
+
+void *alsh_make_varargs_array_i64(size_t count) {
+    return alsh_arena_alloc(sizeof(int64_t) * count);
+}
+
+void alsh_varargs_store_i64(void *base, size_t idx, int64_t v) {
+    int64_t *arr = (int64_t*)base;
+    arr[idx] = v;
+}
+
+void *alsh_make_varargs_array_f64(size_t count) {
+    return alsh_arena_alloc(sizeof(double) * count);
+}
+
+void alsh_varargs_store_f64(void *base, size_t idx, double v) {
+    double *arr = (double*)base;
+    arr[idx] = v;
+}
+
+void *alsh_make_varargs_array_ptr(size_t count) {
+    return alsh_arena_alloc(sizeof(void*) * count);
+}
+
+void alsh_varargs_store_ptr(void *base, size_t idx, void *v) {
+    void **arr = (void**)base;
+    arr[idx] = v;
+}
+
+int32_t alsh_varargs_get_i32(void *base, size_t idx) {
+    int32_t *arr = (int32_t*)base;
+    return arr[idx];
+}
+
+int64_t alsh_varargs_get_i64(void *base, size_t idx) {
+    int64_t *arr = (int64_t*)base;
+    return arr[idx];
+}
+
+double alsh_varargs_get_f64(void *base, size_t idx) {
+    double *arr = (double*)base;
+    return arr[idx];
+}
+
+void *alsh_varargs_get_ptr(void *base, size_t idx) {
+    void **arr = (void**)base;
+    return arr[idx];
+}
+

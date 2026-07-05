@@ -1,0 +1,37 @@
+@stdlib
+@main
+
+function main() int {
+    println("=== Testing String Utility Functions ===")
+
+    println("")
+    println("strlen test:")
+    let len = std::strlen("Hello")
+    println("Length of 'Hello': $len")
+
+    println("")
+    println("upper test:")
+    let upper = std::upper("hello world")
+    println("Upper: $upper")
+
+    println("")
+    println("lower test:")
+    let lower = std::lower("HELLO WORLD")
+    println("Lower: $lower")
+
+    println("")
+    println("contains test:")
+    let contains1 = std::contains("hello world", "world")
+    let contains2 = std::contains("hello world", "xyz")
+    println("Contains 'world': $contains1")
+    println("Contains 'xyz': $contains2")
+
+    println("")
+    println("startswith test:")
+    let starts1 = std::startswith("hello world", "hello")
+    let starts2 = std::startswith("hello world", "world")
+    println("Starts with 'hello': $starts1")
+    println("Starts with 'world': $starts2")
+
+    return 0
+}

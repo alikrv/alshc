@@ -30,4 +30,16 @@ fn main() {
     println!("cargo:rustc-link-search=native={}/alshpp", manifest_dir);
     // Link statically with libalshpp.a
     println!("cargo:rustc-link-lib=static=alshpp");
+
+    // Ensure alshpp static library exists by invoking its Makefile to build the library
+    let alshpp_dir = PathBuf::from(manifest_dir).join("alshpp");
+    let make_status = Command::new("make")
+        .args(&["lib"])
+        .current_dir(&alshpp_dir)
+        .status()
+        .expect("Failed to run make in alshpp directory");
+
+    if !make_status.success() {
+        panic!("Failed to build alshpp static library");
+    }
 }

@@ -4,6 +4,8 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
+#[allow(deprecated)]
+use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, BasicType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::OptimizationLevel;
 use inkwell::AddressSpace;
@@ -21,6 +23,7 @@ pub struct CodeGen<'ctx> {
     variable_types: HashMap<String, String>,
     #[allow(dead_code)]
     functions: HashMap<String, FunctionValue<'ctx>>,
+    function_sigs: HashMap<String, Vec<crate::control_flow::Parameter>>,
     just_run: bool,
     has_main: bool,
     main_function_name: Option<String>,
@@ -28,6 +31,7 @@ pub struct CodeGen<'ctx> {
     loop_start_block: Option<BasicBlock<'ctx>>,
     needs_return: bool,
     opt_level: OptimizationLevel,
+    global_counter: u64,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -42,6 +46,7 @@ impl<'ctx> CodeGen<'ctx> {
             variables: HashMap::new(),
             variable_types: HashMap::new(),
             functions: HashMap::new(),
+            function_sigs: HashMap::new(),
             just_run,
             has_main: false,
             main_function_name: None,
@@ -49,6 +54,7 @@ impl<'ctx> CodeGen<'ctx> {
             loop_start_block: None,
             needs_return: true,
             opt_level,
+            global_counter: 0,
         }
     }
 
@@ -154,6 +160,7 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
+    #[allow(deprecated)]
     fn declare_function(
         &mut self,
         name: &str,
@@ -180,24 +187,44 @@ impl<'ctx> CodeGen<'ctx> {
         let fn_type = if actual_name == "main" {
             i32_type.fn_type(&[i32_type.into(), argv_type.into()], false)
         } else {
-            // Convert parameter types to LLVM types
-            let param_types: Vec<_> = params.iter().map(|p| {
-                match p.type_name.as_str() {
-                    "i32" | "int" => i32_type.into(),
-                    "i64" | "long" => self.context.i64_type().into(),
-                    "f64" | "double" | "float" => self.context.f64_type().into(),
-                    "bool" => i32_type.into(), // bool is i1 in LLVM, but we use i32 for simplicity
-                    "str" => self.context.ptr_type(AddressSpace::default()).into(),
-                    _ => i32_type.into(), // default to i32
+            // Convert parameter types to LLVM types. If a parameter is variadic,
+            // lower it to two explicit parameters: a pointer to the element array
+            // and an i64 length.
+            let mut param_types_meta: Vec<BasicMetadataTypeEnum> = Vec::new();
+            for p in params.iter() {
+                    if p.is_variadic {
+                    // element pointer type and length
+                    let elem_ptr_ty = match p.type_name.as_str() {
+                        "i32" | "int" => self.context.i32_type().ptr_type(AddressSpace::default()).into(),
+                        "i64" | "long" => self.context.i64_type().ptr_type(AddressSpace::default()).into(),
+                        "f64" | "double" | "float" => self.context.f64_type().ptr_type(AddressSpace::default()).into(),
+                        "bool" => i32_type.ptr_type(AddressSpace::default()).into(),
+                        "str" => self.context.ptr_type(AddressSpace::default()).ptr_type(AddressSpace::default()).into(),
+                        _ => i32_type.ptr_type(AddressSpace::default()).into(),
+                    };
+                    param_types_meta.push(elem_ptr_ty);
+                    param_types_meta.push(self.context.i64_type().into());
+                } else {
+                    let ty = match p.type_name.as_str() {
+                        "i32" | "int" => i32_type.into(),
+                        "i64" | "long" => self.context.i64_type().into(),
+                        "f64" | "double" | "float" => self.context.f64_type().into(),
+                        "bool" => i32_type.into(), // bool is i1 in LLVM, but we use i32 for simplicity
+                        "str" => self.context.ptr_type(AddressSpace::default()).into(),
+                        _ => i32_type.into(), // default to i32
+                    };
+                    param_types_meta.push(ty);
                 }
-            }).collect();
+            }
 
             // For now, all functions return i32. Type system can be extended later.
-            i32_type.fn_type(&param_types, false)
+            i32_type.fn_type(&param_types_meta, false)
         };
 
         let func = self.module.add_function(actual_name, fn_type, None);
         self.functions.insert(name.to_string(), func);
+        // Record the parameter signature for later use at call sites
+        self.function_sigs.insert(name.to_string(), params.to_vec());
         Ok(())
     }
 
@@ -224,24 +251,47 @@ impl<'ctx> CodeGen<'ctx> {
         self.variable_types.clear();
         self.needs_return = true;
 
-        // Set up local variables for parameters
-        for (i, param) in params.iter().enumerate() {
-            if let Some(param_val) = func.get_nth_param(i as u32) {
-                // Create alloca for the parameter with proper type
-                let param_type = match param.type_name.as_str() {
-                    "i32" | "int" => i32_type.into(),
-                    "i64" | "long" => self.context.i64_type().into(),
-                    "f64" | "double" | "float" => self.context.f64_type().into(),
-                    "bool" => i32_type.into(),
-                    "str" => self.context.ptr_type(AddressSpace::default()).into(),
-                    _ => i32_type.into(),
-                };
-                let param_alloca = self.create_entry_alloca(&param.name, param_type)?;
-                self.builder
-                    .build_store(param_alloca, param_val)
-                    .map_err(|e| e.to_string())?;
-                self.variables.insert(param.name.clone(), param_alloca);
-                self.variable_types.insert(param.name.clone(), param.type_name.clone());
+        // Set up local variables for parameters. Variadic params are lowered
+        // to (elem_ptr, len) so we handle those specially.
+        let mut param_index: u32 = 0;
+        for param in params.iter() {
+            if param.is_variadic {
+                // elem_ptr is at param_index, len is at param_index + 1
+                if let Some(elem_ptr_val) = func.get_nth_param(param_index) {
+                    let elem_ptr_alloca = self.create_entry_alloca(&param.name, elem_ptr_val.get_type())?;
+                    self.builder
+                        .build_store(elem_ptr_alloca, elem_ptr_val)
+                        .map_err(|e| e.to_string())?;
+                    self.variables.insert(param.name.clone(), elem_ptr_alloca);
+                    self.variable_types.insert(param.name.clone(), format!("{}[]", param.type_name));
+                }
+                if let Some(len_val) = func.get_nth_param(param_index + 1) {
+                    let len_alloca = self.create_entry_alloca(&format!("{}_len", param.name), len_val.get_type())?;
+                    self.builder
+                        .build_store(len_alloca, len_val)
+                        .map_err(|e| e.to_string())?;
+                    self.variables.insert(format!("{}_len", param.name), len_alloca);
+                    self.variable_types.insert(format!("{}_len", param.name), "i64".to_string());
+                }
+                param_index += 2;
+            } else {
+                if let Some(param_val) = func.get_nth_param(param_index) {
+                    let param_type = match param.type_name.as_str() {
+                        "i32" | "int" => i32_type.into(),
+                        "i64" | "long" => self.context.i64_type().into(),
+                        "f64" | "double" | "float" => self.context.f64_type().into(),
+                        "bool" => i32_type.into(),
+                        "str" => self.context.ptr_type(AddressSpace::default()).into(),
+                        _ => i32_type.into(),
+                    };
+                    let param_alloca = self.create_entry_alloca(&param.name, param_type)?;
+                    self.builder
+                        .build_store(param_alloca, param_val)
+                        .map_err(|e| e.to_string())?;
+                    self.variables.insert(param.name.clone(), param_alloca);
+                    self.variable_types.insert(param.name.clone(), param.type_name.clone());
+                }
+                param_index += 1;
             }
         }
 
@@ -817,8 +867,24 @@ impl<'ctx> CodeGen<'ctx> {
 
         match condition {
             Condition::Compare(left, op, right) => {
-                let left_val = self.generate_expression(left)?.into_int_value();
-                let right_val = self.generate_expression(right)?.into_int_value();
+                let mut left_val = self.generate_expression(left)?.into_int_value();
+                let mut right_val = self.generate_expression(right)?.into_int_value();
+
+                let left_bits = left_val.get_type().get_bit_width();
+                let right_bits = right_val.get_type().get_bit_width();
+                if left_bits != right_bits {
+                    if left_bits < right_bits {
+                        left_val = self
+                            .builder
+                            .build_int_s_extend(left_val, right_val.get_type(), "ext_left")
+                            .map_err(|e| e.to_string())?;
+                    } else {
+                        right_val = self
+                            .builder
+                            .build_int_s_extend(right_val, left_val.get_type(), "ext_right")
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
 
                 let predicate = match op {
                     crate::control_flow::CompareOp::Lt => IntPredicate::SLT,
@@ -835,9 +901,9 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Condition::Command(expr) => {
                 let val = self.generate_expression(expr)?.into_int_value();
-                // Convert i32 to i1 by comparing to 0 (non-zero is true)
+                let zero = val.get_type().const_int(0, false);
                 self.builder
-                    .build_int_compare(IntPredicate::NE, val, val.get_type().const_int(0, false), "cond")
+                    .build_int_compare(IntPredicate::NE, val, zero, "cond")
                     .map_err(|e| e.to_string())
             }
             _ => Err("Unsupported condition type".to_string()),
@@ -860,9 +926,11 @@ impl<'ctx> CodeGen<'ctx> {
                         // Create a global C string and then create a global alsh_str pointing at it
                         let bytes = s.as_bytes();
                         let str_val = self.context.const_string(bytes, true);
-                        let global_chars =
-                            self.module
-                                .add_global(str_val.get_type(), None, "str_chars");
+                        let idx = self.global_counter;
+                        self.global_counter += 1;
+                        let global_chars_name = format!("str_chars_{}", idx);
+                        let alsh_str_name = format!("str_obj_{}", idx);
+                        let global_chars = self.module.add_global(str_val.get_type(), None, &global_chars_name);
                         global_chars.set_initializer(&str_val);
                         // alsh_str instance as a global struct
                         let i64_type = self.context.i64_type();
@@ -871,7 +939,7 @@ impl<'ctx> CodeGen<'ctx> {
                             &[i64_type.into(), i64_type.into(), i8_ptr_type.into()],
                             false,
                         );
-                        let alsh_str_global = self.module.add_global(alsh_str_ty, None, "str_obj");
+                        let alsh_str_global = self.module.add_global(alsh_str_ty, None, &alsh_str_name);
                         // Build initializer: { len, cap, ptr }
                         let len = i64_type.const_int(bytes.len() as u64, false);
                         let cap = i64_type.const_int(bytes.len() as u64, false);
@@ -1009,31 +1077,249 @@ impl<'ctx> CodeGen<'ctx> {
         name: &str,
         args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Ensure runtime varargs helpers are declared in the module so they
+        // can be called from ALSH code (e.g. alsh_varargs_get_i32).
+        if !self.functions.contains_key(name) {
+            if name.starts_with("alsh_make_varargs_array_") {
+                let fn_ty = self.context.ptr_type(AddressSpace::default()).fn_type(&[self.context.i64_type().into()], false);
+                let f = self.module.add_function(name, fn_ty, None);
+                self.functions.insert(name.to_string(), f);
+            } else if name.starts_with("alsh_varargs_store_") {
+                // store functions: void store(ptr, i64, <value>)
+                let suffix = &name[19..]; // after 'alsh_varargs_store_'
+                let val_ty: BasicTypeEnum = match suffix {
+                    "i32" => self.context.i32_type().as_basic_type_enum(),
+                    "i64" => self.context.i64_type().as_basic_type_enum(),
+                    "f64" => self.context.f64_type().as_basic_type_enum(),
+                    "ptr" => self.context.ptr_type(AddressSpace::default()).as_basic_type_enum(),
+                    _ => self.context.i32_type().as_basic_type_enum(),
+                };
+                let fn_ty = self.context.void_type().fn_type(&[self.context.ptr_type(AddressSpace::default()).into(), self.context.i64_type().into(), val_ty.into()], false);
+                let f = self.module.add_function(name, fn_ty, None);
+                self.functions.insert(name.to_string(), f);
+            } else if name.starts_with("alsh_varargs_get_") {
+                // get functions: <value> get(ptr, i64)
+                let suffix = &name[16..]; // after 'alsh_varargs_get_'
+                let ret_ty: BasicTypeEnum = match suffix {
+                    "i32" => self.context.i32_type().as_basic_type_enum(),
+                    "i64" => self.context.i64_type().as_basic_type_enum(),
+                    "f64" => self.context.f64_type().as_basic_type_enum(),
+                    "ptr" => self.context.ptr_type(AddressSpace::default()).as_basic_type_enum(),
+                    _ => self.context.i32_type().as_basic_type_enum(),
+                };
+                let fn_ty = ret_ty.fn_type(&[self.context.ptr_type(AddressSpace::default()).into(), self.context.i64_type().into()], false);
+                let f = self.module.add_function(name, fn_ty, None);
+                self.functions.insert(name.to_string(), f);
+            }
+        }
+
         if let Some(func) = self.functions.get(name).cloned() {
             // Call user-defined function
-            let mut arg_vals = Vec::new();
-            for arg in args {
-                let val = self.generate_expression(arg)?;
-                arg_vals.push(val.into());
-            }
+            let mut arg_vals: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
 
-            let call_result = self
-                .builder
-                .build_call(func, &arg_vals, "call")
-                .map_err(|e| e.to_string())?;
+            if let Some(sig) = self.function_sigs.get(name).cloned() {
+                // If last parameter is variadic, pack remaining args into an array
+                if let Some(last_param) = sig.last() {
+                    if last_param.is_variadic {
+                        let fixed_count = sig.len() - 1;
+                        // first, handle fixed args
+                        for i in 0..fixed_count {
+                            if i < args.len() {
+                                let v = self.generate_expression(&args[i])?;
+                                arg_vals.push(v.into());
+                            } else {
+                                // missing arg: push default 0
+                                arg_vals.push(self.context.i32_type().const_int(0, false).into());
+                            }
+                        }
 
-            match call_result.try_as_basic_value() {
-                inkwell::values::ValueKind::Basic(v) => Ok(v),
-                inkwell::values::ValueKind::Instruction(_) => {
-                    Err(format!("Function {} returned void", name))
+                        // pack variadic args
+                        let var_args = if args.len() > fixed_count { &args[fixed_count..] } else { &[] };
+                        let var_count = var_args.len();
+
+                        // element type selection (kept for potential casting needs)
+
+                        // Allocate varargs array via runtime helper and store elements via runtime helper.
+                        let make_name = match last_param.type_name.as_str() {
+                            "i32" | "int" => "alsh_make_varargs_array_i32",
+                            "i64" | "long" => "alsh_make_varargs_array_i64",
+                            "f64" | "double" | "float" => "alsh_make_varargs_array_f64",
+                            "bool" => "alsh_make_varargs_array_i32",
+                            "str" => "alsh_make_varargs_array_ptr",
+                            _ => "alsh_make_varargs_array_i32",
+                        };
+
+                        let store_name = match last_param.type_name.as_str() {
+                            "i32" | "int" => "alsh_varargs_store_i32",
+                            "i64" | "long" => "alsh_varargs_store_i64",
+                            "f64" | "double" | "float" => "alsh_varargs_store_f64",
+                            "bool" => "alsh_varargs_store_i32",
+                            "str" => "alsh_varargs_store_ptr",
+                            _ => "alsh_varargs_store_i32",
+                        };
+
+                        // declare/ensure make function exists: void* make(size_t)
+                        let i64_type = self.context.i64_type();
+                        let ptr_type = self.context.ptr_type(AddressSpace::default());
+                        let make_fn_ty = ptr_type.fn_type(&[i64_type.into()], false);
+                        let make_fn = match self.module.get_function(make_name) {
+                            Some(f) => f,
+                            None => self.module.add_function(make_name, make_fn_ty, None),
+                        };
+
+                        // call make_fn with count
+                        let count_arg = i64_type.const_int(var_count as u64, false);
+                        let make_call = self.builder.build_call(make_fn, &[count_arg.into()], "make_varargs").map_err(|e| e.to_string())?;
+                        let array_ptr = match make_call.try_as_basic_value() {
+                            inkwell::values::ValueKind::Basic(v) => v,
+                            _ => return Err("Failed to create varargs array".to_string()),
+                        };
+
+                        // store each element using store_fn
+                        // value type depends on element type
+                        let value_type = match last_param.type_name.as_str() {
+                            "i32" | "int" => self.context.i32_type().into(),
+                            "i64" | "long" => self.context.i64_type().into(),
+                            "f64" | "double" | "float" => self.context.f64_type().into(),
+                            "bool" => self.context.i32_type().into(),
+                            "str" => ptr_type.into(),
+                            _ => self.context.i32_type().into(),
+                        };
+
+                        let store_fn_ty = self.context.void_type().fn_type(&[ptr_type.into(), i64_type.into(), value_type], false);
+                        let store_fn = match self.module.get_function(store_name) {
+                            Some(f) => f,
+                            None => self.module.add_function(store_name, store_fn_ty, None),
+                        };
+
+                        for (j, expr) in var_args.iter().enumerate() {
+                            let v = self.generate_expression(expr)?;
+                            // adjust integer widths if needed
+                            let final_val: BasicValueEnum = match v {
+                                BasicValueEnum::IntValue(iv) => {
+                                    // store as i64 for uniformity when store expects i64, otherwise cast
+                                    if last_param.type_name == "i64" || last_param.type_name == "long" {
+                                        BasicValueEnum::IntValue(iv)
+                                    } else {
+                                        BasicValueEnum::IntValue(iv)
+                                    }
+                                }
+                                other => other,
+                            };
+
+                            // idx as i64
+                            let idx_val = i64_type.const_int(j as u64, false);
+                            // Prepare store args: (array_ptr, idx, value)
+                            let mut store_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+                            store_args.push(array_ptr.into());
+                            store_args.push(idx_val.into());
+                            // For value, ensure type matches value_type
+                            match (final_val, last_param.type_name.as_str()) {
+                                (BasicValueEnum::IntValue(iv), "i32") | (BasicValueEnum::IntValue(iv), "int") | (BasicValueEnum::IntValue(iv), "bool") => {
+                                    store_args.push(iv.into());
+                                }
+                                (BasicValueEnum::IntValue(iv), "i64") | (BasicValueEnum::IntValue(iv), "long") => {
+                                    store_args.push(iv.into());
+                                }
+                                (BasicValueEnum::FloatValue(fv), "f64") | (BasicValueEnum::FloatValue(fv), "double") | (BasicValueEnum::FloatValue(fv), "float") => {
+                                    store_args.push(fv.into());
+                                }
+                                (BasicValueEnum::PointerValue(pv), "str") => {
+                                    store_args.push(pv.into());
+                                }
+                                (other, _) => {
+                                    store_args.push(other.into());
+                                }
+                            }
+
+                            let _ = self.builder.build_call(store_fn, &store_args, "store_va").map_err(|e| e.to_string())?;
+                        }
+
+                        // push pointer and length
+                        arg_vals.push(array_ptr.into());
+                        arg_vals.push(i64_type.const_int(var_count as u64, false).into());
+
+                        // build call
+                        let call_result = self
+                            .builder
+                            .build_call(func, &arg_vals, "call")
+                            .map_err(|e| e.to_string())?;
+
+                        return match call_result.try_as_basic_value() {
+                            inkwell::values::ValueKind::Basic(v) => Ok(v),
+                            inkwell::values::ValueKind::Instruction(_) => {
+                                Err(format!("Function {} returned void", name))
+                            }
+                        };
+                    } else {
+                        // no variadic: normal path
+                        for arg in args {
+                            let val = self.generate_expression(arg)?;
+                            arg_vals.push(val.into());
+                        }
+                        let call_result = self
+                            .builder
+                            .build_call(func, &arg_vals, "call")
+                            .map_err(|e| e.to_string())?;
+                        return match call_result.try_as_basic_value() {
+                            inkwell::values::ValueKind::Basic(v) => Ok(v),
+                            inkwell::values::ValueKind::Instruction(_) => {
+                                Err(format!("Function {} returned void", name))
+                            }
+                        };
+                    }
+                } else {
+                    return Err(format!("Empty signature for function {}", name));
                 }
+            } else {
+                // no signature recorded: fallback to naïve call
+                for arg in args {
+                    let val = self.generate_expression(arg)?;
+                    arg_vals.push(val.into());
+                }
+                let call_result = self
+                    .builder
+                    .build_call(func, &arg_vals, "call")
+                    .map_err(|e| e.to_string())?;
+                return match call_result.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    inkwell::values::ValueKind::Instruction(_) => {
+                        Err(format!("Function {} returned void", name))
+                    }
+                };
             }
+            //return Err(format!("Internal error generating function call for {}", name));
         } else if name.starts_with("std::") {
             // Standard library functions - call the C FFI wrappers from alsh-std
             let c_func_name = format!("alsh_std_{}", &name[5..]); // remove "std::" prefix
             self.generate_stdlib_call(&c_func_name, args)
+        } else if name.starts_with("alsh_") {
+            self.generate_runtime_call(name, args)
         } else {
             Err(format!("Unknown function: {}", name))
+        }
+    }
+
+    fn generate_runtime_call(
+        &mut self,
+        name: &str,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let func = self.get_runtime_fn(name);
+        let mut arg_vals: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+        for arg in args {
+            let val = self.generate_expression(arg)?;
+            arg_vals.push(val.into());
+        }
+        let call_result = self
+            .builder
+            .build_call(func, &arg_vals, "runtime_call")
+            .map_err(|e| e.to_string())?;
+        match call_result.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v),
+            inkwell::values::ValueKind::Instruction(_) => {
+                Err(format!("Function {} returned void", name))
+            }
         }
     }
 
@@ -1231,13 +1517,56 @@ impl<'ctx> CodeGen<'ctx> {
         args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let c_fn = self.get_c_function(name)?;
-        let mut arg_vals = Vec::new();
+        let mut arg_vals: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
         for arg in args {
             arg_vals.push(self.generate_c_call_argument(arg)?.into());
         }
+        // Adjust integer widths for variadic C functions (e.g., printf).
+        // For printf we promote/truncate integers to 32-bit as expected by common format specifiers.
+        // Convert metadata args to basic values so we can adjust integer widths,
+        // then convert back to metadata values for the call.
+        let mut final_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+        let is_vararg = c_fn.get_type().is_var_arg();
+        for meta in arg_vals.into_iter() {
+            let basic: BasicValueEnum = match meta {
+                inkwell::values::BasicMetadataValueEnum::IntValue(iv) => BasicValueEnum::IntValue(iv),
+                inkwell::values::BasicMetadataValueEnum::FloatValue(fv) => BasicValueEnum::FloatValue(fv),
+                inkwell::values::BasicMetadataValueEnum::PointerValue(pv) => BasicValueEnum::PointerValue(pv),
+                inkwell::values::BasicMetadataValueEnum::StructValue(sv) => BasicValueEnum::StructValue(sv),
+                inkwell::values::BasicMetadataValueEnum::VectorValue(vv) => BasicValueEnum::VectorValue(vv),
+                inkwell::values::BasicMetadataValueEnum::ArrayValue(av) => BasicValueEnum::ArrayValue(av),
+                inkwell::values::BasicMetadataValueEnum::ScalableVectorValue(sv) => BasicValueEnum::ScalableVectorValue(sv),
+                inkwell::values::BasicMetadataValueEnum::MetadataValue(_) => {
+                    return Err("unsupported metadata value in C call arguments".to_string());
+                }
+            };
+
+            let adjusted = match basic {
+                BasicValueEnum::IntValue(iv) if is_vararg || name == "printf" => {
+                    let bits = iv.get_type().get_bit_width();
+                    if bits != 32 {
+                        let cast = if bits > 32 {
+                            self.builder
+                                .build_int_truncate(iv, self.context.i32_type(), "vararg_trunc")
+                                .map_err(|e| e.to_string())?
+                        } else {
+                            self.builder
+                                .build_int_s_extend(iv, self.context.i32_type(), "vararg_ext")
+                                .map_err(|e| e.to_string())?
+                        };
+                        BasicValueEnum::IntValue(cast)
+                    } else {
+                        BasicValueEnum::IntValue(iv)
+                    }
+                }
+                other => other,
+            };
+            final_args.push(adjusted.into());
+        }
+
         let _ = self
             .builder
-            .build_call(c_fn, &arg_vals, &format!("c_{}", name))
+            .build_call(c_fn, &final_args, &format!("c_{}", name))
             .map_err(|e| e.to_string())?;
         // Return a dummy value - the actual return depends on the C function
         Ok(self.context.i32_type().const_int(0, false).into())
@@ -1248,9 +1577,12 @@ impl<'ctx> CodeGen<'ctx> {
         expr: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match expr {
-            Expression::Literal(crate::control_flow::Value::String(s)) => {
+                Expression::Literal(crate::control_flow::Value::String(s)) => {
                 let str_val = self.context.const_string(s.as_bytes(), true);
-                let global_chars = self.module.add_global(str_val.get_type(), None, "cstr");
+                let idx = self.global_counter;
+                self.global_counter += 1;
+                let global_name = format!("cstr_{}", idx);
+                let global_chars = self.module.add_global(str_val.get_type(), None, &global_name);
                 global_chars.set_initializer(&str_val);
                 let ptr_type = self.context.ptr_type(AddressSpace::default());
                 let cstr_ptr = self
@@ -1370,6 +1702,17 @@ impl<'ctx> CodeGen<'ctx> {
             "alsh_int_to_str" => ptr_type.fn_type(&[self.context.i64_type().into()], false),
             "alsh_float_to_str" => ptr_type.fn_type(&[self.context.f64_type().into()], false),
             "alsh_make_heap_str" => ptr_type.fn_type(&[ptr_type.into(), self.context.i64_type().into()], false),
+            "alsh_make_varargs_array_i32" | "alsh_make_varargs_array_i64" | "alsh_make_varargs_array_f64" | "alsh_make_varargs_array_ptr" => {
+                ptr_type.fn_type(&[self.context.i64_type().into()], false)
+            }
+            "alsh_varargs_store_i32" => self.context.void_type().fn_type(&[ptr_type.into(), self.context.i64_type().into(), self.context.i32_type().into()], false),
+            "alsh_varargs_store_i64" => self.context.void_type().fn_type(&[ptr_type.into(), self.context.i64_type().into(), self.context.i64_type().into()], false),
+            "alsh_varargs_store_f64" => self.context.void_type().fn_type(&[ptr_type.into(), self.context.i64_type().into(), self.context.f64_type().into()], false),
+            "alsh_varargs_store_ptr" => self.context.void_type().fn_type(&[ptr_type.into(), self.context.i64_type().into(), ptr_type.into()], false),
+            "alsh_varargs_get_i32" => self.context.i32_type().fn_type(&[ptr_type.into(), self.context.i64_type().into()], false),
+            "alsh_varargs_get_i64" => self.context.i64_type().fn_type(&[ptr_type.into(), self.context.i64_type().into()], false),
+            "alsh_varargs_get_f64" => self.context.f64_type().fn_type(&[ptr_type.into(), self.context.i64_type().into()], false),
+            "alsh_varargs_get_ptr" => ptr_type.fn_type(&[ptr_type.into(), self.context.i64_type().into()], false),
             _ => unreachable!("unknown runtime fn: {}", name),
         };
         self.module.add_function(name, fn_type, None)

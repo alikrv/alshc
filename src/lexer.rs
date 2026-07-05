@@ -50,6 +50,7 @@ pub enum TokenKind {
     Colon,
     Semi,
     Dot,
+    Ellipsis,
     Arrow,
     LParen,
     RParen,
@@ -185,8 +186,14 @@ impl<'a> Lexer<'a> {
                     TokenKind::Semi
                 }
                 '.' => {
-                    self.advance();
-                    TokenKind::Dot
+                    // Recognize '...' as Ellipsis token
+                    if self.peek_at(1) == Some('.') && self.peek_at(2) == Some('.') {
+                        self.advance(); self.advance(); self.advance();
+                        TokenKind::Ellipsis
+                    } else {
+                        self.advance();
+                        TokenKind::Dot
+                    }
                 }
                 '+' => {
                     self.advance();
